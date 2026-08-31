@@ -11,8 +11,15 @@ namespace SyncRush
     ///   MainPanel  ──[Host]──>  HostPanel  ──[Start Host]──>  WaitingPanel
     ///              ──[Join]──>  JoinPanel  ──[Join]────────>  WaitingPanel
     ///
-    /// Any panel has a Back button that returns to MainPanel.
-    /// WaitingPanel has a Leave button that calls LobbyManager.Disconnect().
+    /// WaitingPanel:
+    ///   - Host sees a "START GAME" button — calls LobbyManager.StartGame()
+    ///     which uses NGO NetworkSceneManager to load GameScene for everyone.
+    ///   - Clients see "Waiting for host to start..." — no start button.
+    ///   - Both see a "LEAVE" button.
+    ///
+    /// Scene separation:
+    ///   This canvas lives in LobbyScene only. GameScene has no lobby UI.
+    ///   NGO keeps NetworkManager alive across the scene load via DontDestroyOnLoad.
     /// </summary>
     public class LobbyUI : MonoBehaviour
     {
@@ -47,21 +54,20 @@ namespace SyncRush
         [SerializeField] private TextMeshProUGUI _waitingCodeDisplay;
         [SerializeField] private TextMeshProUGUI _waitingStatusText;
         [SerializeField] private TextMeshProUGUI _playerCountText;
+        [SerializeField] private Button _startGameButton;   // host-only
         [SerializeField] private Button _leaveButton;
 
         // ── Unity ─────────────────────────────────────────────────────────────
 
         private void Awake()
         {
-            // Main panel buttons
+            // Main panel
             _hostButton.onClick.AddListener(ShowHostPanel);
             _joinButton.onClick.AddListener(ShowJoinPanel);
 
-            // Host panel buttons
+            // Host panel
             _startHostButton.onClick.AddListener(OnStartHostClicked);
             _hostBackButton.onClick.AddListener(ShowMainPanel);
-
-            // Enforce uppercase + max length on host code input
             _hostCodeInput.onValueChanged.AddListener(val =>
             {
                 string upper = val.ToUpper();
@@ -70,11 +76,9 @@ namespace SyncRush
                     _hostCodeInput.SetTextWithoutNotify(upper[..LobbyManager.CodeLength]);
             });
 
-            // Join panel buttons
+            // Join panel
             _joinConfirmButton.onClick.AddListener(OnJoinClicked);
             _joinBackButton.onClick.AddListener(ShowMainPanel);
-
-            // Enforce uppercase + max length on join code input
             _joinCodeInput.onValueChanged.AddListener(val =>
             {
                 string upper = val.ToUpper();
@@ -84,6 +88,7 @@ namespace SyncRush
             });
 
             // Waiting panel
+            _startGameButton.onClick.AddListener(OnStartGameClicked);
             _leaveButton.onClick.AddListener(OnLeaveClicked);
         }
 
@@ -97,6 +102,7 @@ namespace SyncRush
             LobbyManager.Instance.OnPlayerJoined     += HandlePlayerJoined;
             LobbyManager.Instance.OnPlayerLeft       += HandlePlayerLeft;
             LobbyManager.Instance.OnSessionEnded     += HandleSessionEnded;
+            LobbyManager.Instance.OnPlayerCountChanged += HandlePlayerCountChanged;
         }
 
         private void OnDisable()
@@ -109,6 +115,7 @@ namespace SyncRush
             LobbyManager.Instance.OnPlayerJoined     -= HandlePlayerJoined;
             LobbyManager.Instance.OnPlayerLeft       -= HandlePlayerLeft;
             LobbyManager.Instance.OnSessionEnded     -= HandleSessionEnded;
+            LobbyManager.Instance.OnPlayerCountChanged -= HandlePlayerCountChanged;
         }
 
         private void Start()
@@ -121,13 +128,11 @@ namespace SyncRush
         private void OnStartHostClicked()
         {
             string code = _hostCodeInput.text.Trim().ToUpper();
-
             if (!LobbyManager.IsValidCode(code))
             {
                 ShowHostError($"Code must be exactly {LobbyManager.CodeLength} letters or numbers.");
                 return;
             }
-
             ClearHostError();
             LobbyManager.Instance.StartHost(code);
         }
@@ -135,16 +140,20 @@ namespace SyncRush
         private void OnJoinClicked()
         {
             string code = _joinCodeInput.text.Trim().ToUpper();
-
             if (!LobbyManager.IsValidCode(code))
             {
                 ShowJoinError($"Code must be exactly {LobbyManager.CodeLength} letters or numbers.");
                 return;
             }
-
             ClearJoinError();
             _joinConfirmButton.interactable = false;
             LobbyManager.Instance.JoinAsClient(code);
+        }
+
+        private void OnStartGameClicked()
+        {
+            // Only the host can start — button is hidden for clients anyway
+            LobbyManager.Instance.StartGame();
         }
 
         private void OnLeaveClicked()
@@ -159,30 +168,19 @@ namespace SyncRush
             _waitingCodeDisplay.text = $"Your Code: <b>{code}</b>";
             _waitingStatusText.text  = "Waiting for players...";
             UpdatePlayerCount();
+            // Host sees Start Game button, clients do not
+            _startGameButton.gameObject.SetActive(true);
             ShowWaitingPanel();
         }
 
         private void HandleClientConnected()
         {
             _waitingCodeDisplay.text = $"Code: <b>{LobbyManager.Instance.CurrentCode}</b>";
-            _waitingStatusText.text  = "Connected! Waiting for host to start...";
+            _waitingStatusText.text  = "Waiting for host to start...";
             UpdatePlayerCount();
+            // Clients never see the Start Game button
+            _startGameButton.gameObject.SetActive(false);
             ShowWaitingPanel();
-        }
-
-        /// <summary>
-        /// Hides the entire lobby canvas once the race starts.
-        /// Called by RaceStateMachine when transitioning out of Lobby state.
-        /// </summary>
-        public void HideCanvas() => gameObject.SetActive(false);
-
-        /// <summary>
-        /// Re-shows the lobby canvas (e.g. returning to main menu after a race).
-        /// </summary>
-        public void ShowCanvas()
-        {
-            gameObject.SetActive(true);
-            ShowMainPanel();
         }
 
         private void HandleConnectionFailed(string reason)
@@ -195,10 +193,15 @@ namespace SyncRush
         {
             UpdatePlayerCount();
             if (LobbyManager.Instance.IsHost)
-                _waitingStatusText.text = $"Player {clientId} joined.";
+                _waitingStatusText.text = $"Player {clientId} joined. Waiting for more...";
         }
 
         private void HandlePlayerLeft(ulong clientId)
+        {
+            UpdatePlayerCount();
+        }
+
+        private void HandlePlayerCountChanged(int count)
         {
             UpdatePlayerCount();
         }
@@ -220,15 +223,15 @@ namespace SyncRush
             ClearJoinError();
         }
 
-        private void ShowHostPanel()   => SetActivePanel(_hostPanel);
-        private void ShowJoinPanel()   => SetActivePanel(_joinPanel);
+        private void ShowHostPanel()    => SetActivePanel(_hostPanel);
+        private void ShowJoinPanel()    => SetActivePanel(_joinPanel);
         private void ShowWaitingPanel() => SetActivePanel(_waitingPanel);
 
         private void SetActivePanel(GameObject active)
         {
-            _mainPanel.SetActive(active == _mainPanel);
-            _hostPanel.SetActive(active == _hostPanel);
-            _joinPanel.SetActive(active == _joinPanel);
+            _mainPanel.SetActive(active    == _mainPanel);
+            _hostPanel.SetActive(active    == _hostPanel);
+            _joinPanel.SetActive(active    == _joinPanel);
             _waitingPanel.SetActive(active == _waitingPanel);
         }
 
@@ -236,7 +239,7 @@ namespace SyncRush
 
         private void UpdatePlayerCount()
         {
-            int count = LobbyManager.Instance.ConnectedClientIds.Count;
+            int count = LobbyManager.Instance.PlayerCount;
             _playerCountText.text = $"Players: {count} / 4";
         }
 

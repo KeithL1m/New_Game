@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace SyncRush
 {
@@ -14,11 +16,18 @@ namespace SyncRush
     ///   - Codes are normalised to uppercase before storage and comparison.
     ///   - No auto-generation — the host owns the code.
     ///
-    /// This is a localhost/LAN implementation. Unity Relay integration
-    /// (internet play) is a Pre-Work task and will wrap this class.
+    /// Scene flow:
+    ///   LobbyScene  ──[Host starts game]──>  GameScene  (NGO NetworkSceneManager)
+    ///   GameScene   ──[Session ends]────────>  LobbyScene
+    ///
+    /// NetworkManager persists across scenes via DontDestroyOnLoad (NGO default).
     /// </summary>
     public class LobbyManager : MonoBehaviour
     {
+        // ── Scene names — must match Build Settings exactly ───────────────────
+        public const string LobbySceneName = "LobbyScene";
+        public const string GameSceneName  = "GameScene";
+
         // ── Singleton ─────────────────────────────────────────────────────────
         public static LobbyManager Instance { get; private set; }
 
@@ -26,10 +35,19 @@ namespace SyncRush
         public const int CodeLength = 6;
         private const string ValidChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
+        // NGO only invokes OnClientConnectedCallback on a non-host client for its
+        // OWN LocalClientId — it is never told about other peers joining or
+        // leaving. So ConnectedClientIds is only ever accurate on the server
+        // (host). PlayerCount is instead pushed to every peer explicitly via a
+        // named message whenever the server's roster changes, so it stays
+        // correct on joining clients too.
+        private const string PlayerCountMessageName = "SyncRush_PlayerCount";
+
         // ── State ─────────────────────────────────────────────────────────────
         public string CurrentCode { get; private set; } = string.Empty;
         public bool IsHost { get; private set; }
         public List<ulong> ConnectedClientIds { get; private set; } = new();
+        public int PlayerCount { get; private set; }
 
         // ── Events ────────────────────────────────────────────────────────────
         public event Action<string> OnHostStarted;          // code
@@ -38,6 +56,7 @@ namespace SyncRush
         public event Action<ulong> OnPlayerJoined;          // clientId
         public event Action<ulong> OnPlayerLeft;            // clientId
         public event Action OnSessionEnded;
+        public event Action<int> OnPlayerCountChanged;      // authoritative count, all peers
 
         // ── Unity ─────────────────────────────────────────────────────────────
 
@@ -89,6 +108,7 @@ namespace SyncRush
 
             SubscribeToNetworkManager();
             NetworkManager.Singleton.StartHost();
+            RegisterPlayerCountMessageHandler();
 
             OnHostStarted?.Invoke(CurrentCode);
             Debug.Log($"[LobbyManager] Host started with code: {CurrentCode}");
@@ -113,12 +133,35 @@ namespace SyncRush
 
             SubscribeToNetworkManager();
             NetworkManager.Singleton.StartClient();
+            RegisterPlayerCountMessageHandler();
 
             Debug.Log($"[LobbyManager] Joining with code: {CurrentCode}");
         }
 
         /// <summary>
-        /// Disconnect and reset state.
+        /// Host-only: load the GameScene for all connected clients.
+        /// NGO's NetworkSceneManager synchronises the load across all peers.
+        /// </summary>
+        public void StartGame()
+        {
+            if (!IsHost)
+            {
+                Debug.LogWarning("[LobbyManager] StartGame called on a non-host client — ignored.");
+                return;
+            }
+
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost)
+            {
+                Debug.LogError("[LobbyManager] NetworkManager is not running as host.");
+                return;
+            }
+
+            Debug.Log($"[LobbyManager] Loading {GameSceneName} for all clients.");
+            NetworkManager.Singleton.SceneManager.LoadScene(GameSceneName, LoadSceneMode.Single);
+        }
+
+        /// <summary>
+        /// Disconnect and reset state, then return to LobbyScene.
         /// </summary>
         public void Disconnect()
         {
@@ -130,6 +173,9 @@ namespace SyncRush
             ConnectedClientIds.Clear();
             OnSessionEnded?.Invoke();
 
+            // Return to lobby scene locally
+            SceneManager.LoadScene(LobbySceneName);
+
             Debug.Log("[LobbyManager] Disconnected.");
         }
 
@@ -140,8 +186,8 @@ namespace SyncRush
             var nm = NetworkManager.Singleton;
             if (nm == null) return;
 
-            nm.OnClientConnectedCallback    += HandleClientConnected;
-            nm.OnClientDisconnectCallback   += HandleClientDisconnected;
+            nm.OnClientConnectedCallback  += HandleClientConnected;
+            nm.OnClientDisconnectCallback += HandleClientDisconnected;
         }
 
         private void UnsubscribeFromNetworkManager()
@@ -149,8 +195,53 @@ namespace SyncRush
             var nm = NetworkManager.Singleton;
             if (nm == null) return;
 
-            nm.OnClientConnectedCallback    -= HandleClientConnected;
-            nm.OnClientDisconnectCallback   -= HandleClientDisconnected;
+            nm.OnClientConnectedCallback  -= HandleClientConnected;
+            nm.OnClientDisconnectCallback -= HandleClientDisconnected;
+            nm.CustomMessagingManager?.UnregisterNamedMessageHandler(PlayerCountMessageName);
+        }
+
+        /// <summary>
+        /// CustomMessagingManager only exists once NetworkManager.StartHost/StartClient
+        /// has run (it's created in NGO's internal Initialize()), so this must be
+        /// called AFTER that — unlike the connect/disconnect callbacks above, which
+        /// must be subscribed BEFORE Start*, since the host's own connection fires
+        /// synchronously from within StartHost().
+        /// </summary>
+        private void RegisterPlayerCountMessageHandler()
+        {
+            NetworkManager.Singleton.CustomMessagingManager
+                .RegisterNamedMessageHandler(PlayerCountMessageName, HandlePlayerCountMessage);
+        }
+
+        /// <summary>
+        /// Server-only: pushes the authoritative connected-player count to every
+        /// peer (including itself, via NGO's host loopback). Call whenever the
+        /// server's roster changes.
+        /// </summary>
+        private void BroadcastPlayerCount()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsServer) return;
+
+            // The server trusts its own count directly rather than round-tripping
+            // through the message loopback — the host's own connection event fires
+            // synchronously inside StartHost(), before RegisterPlayerCountMessageHandler()
+            // has run, so a self-addressed message sent that early would be dropped
+            // (no handler registered yet to receive it).
+            PlayerCount = ConnectedClientIds.Count;
+            OnPlayerCountChanged?.Invoke(PlayerCount);
+
+            if (nm.CustomMessagingManager == null) return;
+            using var writer = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
+            writer.WriteValueSafe(PlayerCount);
+            nm.CustomMessagingManager.SendNamedMessageToAll(PlayerCountMessageName, writer);
+        }
+
+        private void HandlePlayerCountMessage(ulong senderClientId, FastBufferReader reader)
+        {
+            reader.ReadValueSafe(out int count);
+            PlayerCount = count;
+            OnPlayerCountChanged?.Invoke(count);
         }
 
         private void HandleClientConnected(ulong clientId)
@@ -158,11 +249,11 @@ namespace SyncRush
             if (!ConnectedClientIds.Contains(clientId))
                 ConnectedClientIds.Add(clientId);
 
-            // If this is the local client connecting as a non-host
             if (!IsHost && clientId == NetworkManager.Singleton.LocalClientId)
                 OnClientConnected?.Invoke();
 
             OnPlayerJoined?.Invoke(clientId);
+            BroadcastPlayerCount();
             Debug.Log($"[LobbyManager] Player joined: {clientId}");
         }
 
@@ -170,8 +261,8 @@ namespace SyncRush
         {
             ConnectedClientIds.Remove(clientId);
             OnPlayerLeft?.Invoke(clientId);
+            BroadcastPlayerCount();
 
-            // If we got disconnected as a client, treat it as a failed connection
             if (!IsHost && clientId == NetworkManager.Singleton.LocalClientId)
                 OnConnectionFailed?.Invoke("Disconnected from host.");
 

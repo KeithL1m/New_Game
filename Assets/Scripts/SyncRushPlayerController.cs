@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -105,12 +106,44 @@ namespace SyncRush
 
             _inputReader.OnJumpPressed += QueueJump;
 
-            // ── Hide lobby UI once spawned into the game ──────────────────────
-            var lobbyUI = Object.FindFirstObjectByType<LobbyUI>();
-            if (lobbyUI != null)
-                lobbyUI.HideCanvas();
-
             // ── Camera attachment ─────────────────────────────────────────────
+            // The player spawns as soon as the client connects, which happens
+            // in LobbyScene — before NGO's NetworkSceneManager loads GameScene.
+            // Camera.main at spawn time is the lobby's static camera, not the
+            // gameplay camera, so we attach now (covers same-scene spawns) and
+            // again whenever a network scene load finishes (covers the lobby
+            // → game transition, where Camera.main only becomes valid after).
+            AttachCamera();
+            if (NetworkManager.SceneManager != null)
+                NetworkManager.SceneManager.OnLoadEventCompleted += HandleSceneLoadCompleted;
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            if (_inputReader != null)
+                _inputReader.OnJumpPressed -= QueueJump;
+
+            if (IsOwner)
+            {
+                if (NetworkManager != null && NetworkManager.SceneManager != null)
+                    NetworkManager.SceneManager.OnLoadEventCompleted -= HandleSceneLoadCompleted;
+
+                var cam = Camera.main;
+                if (cam != null)
+                {
+                    var camController = cam.GetComponent<PlayerCameraController>();
+                    if (camController != null)
+                        camController.Detach();
+                }
+            }
+        }
+
+        private void HandleSceneLoadCompleted(string sceneName, UnityEngine.SceneManagement.LoadSceneMode mode,
+                                               List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
+            => AttachCamera();
+
+        private void AttachCamera()
+        {
             var cam = Camera.main;
             if (cam != null)
             {
@@ -126,29 +159,6 @@ namespace SyncRush
             }
         }
 
-        public override void OnNetworkDespawn()
-        {
-            if (_inputReader != null)
-                _inputReader.OnJumpPressed -= QueueJump;
-
-            if (IsOwner)
-            {
-                // Detach camera
-                var cam = Camera.main;
-                if (cam != null)
-                {
-                    var camController = cam.GetComponent<PlayerCameraController>();
-                    if (camController != null)
-                        camController.Detach();
-                }
-
-                // Re-show lobby UI when returning from game
-                var lobbyUI = Object.FindFirstObjectByType<LobbyUI>();
-                if (lobbyUI != null)
-                    lobbyUI.ShowCanvas();
-            }
-        }
-
         // ── FixedUpdate ───────────────────────────────────────────────────────
 
         // All simulation runs at a fixed timestep — frame-rate independent.
@@ -157,6 +167,14 @@ namespace SyncRush
         private void FixedUpdate()
         {
             if (!IsOwner || !IsSpawned) return;
+
+            // The player object spawns the instant a client connects, which
+            // happens in LobbyScene — before the host clicks Start Game. That
+            // scene has no floor, so simulating gravity there lets players
+            // free-fall for however long the lobby wait lasts; by the time
+            // NGO migrates them into GameScene they're already far below the
+            // platform and never land. Only simulate once actually in GameScene.
+            if (gameObject.scene.name != LobbyManager.GameSceneName) return;
 
             float dt = Time.fixedDeltaTime;
             bool grounded = _cc.isGrounded;
