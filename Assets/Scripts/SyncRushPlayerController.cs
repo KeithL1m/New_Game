@@ -105,6 +105,11 @@ namespace SyncRush
 
             _inputReader.OnJumpPressed += QueueJump;
 
+            // ── Hide lobby UI once spawned into the game ──────────────────────
+            var lobbyUI = Object.FindFirstObjectByType<LobbyUI>();
+            if (lobbyUI != null)
+                lobbyUI.HideCanvas();
+
             // ── Camera attachment ─────────────────────────────────────────────
             var cam = Camera.main;
             if (cam != null)
@@ -128,6 +133,7 @@ namespace SyncRush
 
             if (IsOwner)
             {
+                // Detach camera
                 var cam = Camera.main;
                 if (cam != null)
                 {
@@ -135,6 +141,11 @@ namespace SyncRush
                     if (camController != null)
                         camController.Detach();
                 }
+
+                // Re-show lobby UI when returning from game
+                var lobbyUI = Object.FindFirstObjectByType<LobbyUI>();
+                if (lobbyUI != null)
+                    lobbyUI.ShowCanvas();
             }
         }
 
