@@ -143,9 +143,17 @@ best comedy in the game — tethering to a rival helps them too.
 to function dies the first quiet evening. Bot AI is a spline-follower with injected
 error, a reaction delay, and a dart budget — deliberately simple.
 
-### 5.5 Sabotage darts
+### 5.5 Sabotage darts & the comeback item *(revised 2026-09-04)*
+Sabotage now has two tiers instead of one: a symmetric baseline every player
+carries throughout every race, and a one-time comeback item granted to whoever's
+behind. The old design asked darts to be both the constant comedy engine and the
+rubber-band catch-up at once — splitting those into two systems keeps each one
+simpler and lets darts stay flat and fair.
+
+**Baseline: sabotage darts, available to everyone, every race**
 Light projectiles with travel time and arc. Aiming is a skill; the effects are
-comedic, never damaging.
+comedic, never damaging. Symmetric — no player has better or worse access than
+any other, regardless of placement.
 
 | Dart | Effect | Duration |
 |---|---|---|
@@ -153,15 +161,33 @@ comedic, never damaging.
 | **Soap** | Ground friction → 0.05 — uncontrollable sliding | 5 s |
 | **Mirror** | Horizontal input inverted | 3 s |
 
-**Ammo economy as catch-up:** darts are earned on a timer that runs *faster the
-further behind you are*. Last place fills a dart roughly 2.5× faster than first.
+**Cap:** 2 darts held, refilled on a fixed timer — same rate for everyone,
+regardless of placement. Forces use rather than hoarding; keeps it a deliberate
+skill-shot instead of spam.
 
-> This is rubber-banding expressed through player agency instead of through speed.
-> The trailing player is given *tools* rather than free velocity, so a comeback still
-> feels earned. Speed-based rubber-banding is the standard solution and it makes
-> leading feel meaningless.
+**Comeback item: one-time catch-up mechanic**
+At the end of each round, the losing side is granted one random, more powerful
+item to use during the next race. One-time use, and it expires if unused that
+race — use it or lose it, which creates pressure to deploy it rather than
+stockpile it across rounds.
 
-**Cap:** 2 darts held. Forces use rather than hoarding.
+> **Cut from this design:** the original "ammo fills faster the further behind
+> you are" rubber-band. That job now belongs entirely to the comeback item, so
+> darts can stay a flat, symmetric tool instead of a stealth catch-up mechanic.
+
+**Design constraint (carried over from pillar 2):** "stronger" must mean a
+bigger or flashier comedic effect — longer duration, wider area, a bigger visual
+gag — not a straightforward power/lockout swing that reads as unfair rather than
+funny. The leading team should still feel they could have reacted or dodged.
+This is exactly what M2's kill gate ("does sabotage produce laughter or
+resentment?") should be testing for.
+
+**Open questions — not yet resolved:**
+- What's in the comeback-item pool, and is it drawn randomly or chosen?
+  (Current lean: random, to preserve surprise and skip building a selection UI.)
+- How does "losing side" generalize outside the canonical 2v2 mode? 1v1 Duel and
+  3-player FFA don't have "sides." Likely resolution is "whoever isn't in the
+  lead" / last place, but this needs an explicit decision before implementation.
 
 ### 5.6 The final stretch
 Last ~10 m of the course:
@@ -230,7 +256,7 @@ is exactly right for a party game.
 | `TetherSystem` | **High** | The one genuinely hard piece |
 | `RagdollController` | Medium | Kinematic ↔ ragdoll blending, networked |
 | `StatusEffectSystem` | Low | Networked timed modifiers |
-| `DartProjectile` | Low | Server-validated hit, client-predicted visual |
+| `DartProjectile` | Low | Server-validated hit, client-predicted visual. Also backs the one-time comeback item (§5.5) — same projectile/hit infra, separate effect pool |
 | `ProximityVoice` | Medium | Vivox positional; Doppler is custom DSP |
 | `BotRacer` | Low | Spline follower with noise |
 | Presentation layer | Medium | Cel shader, impact frames, SFX text |
