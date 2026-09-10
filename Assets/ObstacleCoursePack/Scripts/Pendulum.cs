@@ -5,7 +5,7 @@ using UnityEngine;
 
 public class Pendulum : MonoBehaviour
 {
-	public float speed = 1.5f;
+	public float speed = 4;
 	public float limit = 75f; //Limit in degrees of the movement
 	public bool randomStart = false; //If you want to modify the start position
 	private float random = 0;
@@ -28,6 +28,6 @@ public class Pendulum : MonoBehaviour
 			? NetworkManager.Singleton.ServerTime.TimeAsFloat
 			: Time.time;
 		float angle = limit * Mathf.Sin(time + random * speed);
-		transform.localRotation = Quaternion.Euler(0, 0, angle);
+		transform.localRotation = Quaternion.Euler(0, 90, angle); // Change the y value to 0 to change swinging direction
 	}
 }

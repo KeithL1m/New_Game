@@ -35,10 +35,10 @@ namespace SyncRush
 
         [Header("Jump")]
         [Tooltip("Apex height in metres (GDD: 1.8 m).")]
-        [SerializeField] private float _jumpHeight = 1.8f;
+        [SerializeField] private float _jumpHeight = 2.5f;
 
         [Tooltip("Coyote-time window in seconds (GDD: 0.12 s).")]
-        [SerializeField] private float _coyoteTime = 0.12f;
+        [SerializeField] private float _coyoteTime = 0.09f;
 
         [Header("Stamina")]
         [SerializeField] private float _staminaMax = 1f;
