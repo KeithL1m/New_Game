@@ -103,11 +103,20 @@ namespace SyncRush
         /// </summary>
         public void StartHost(string code)
         {
+            ResetStaleSession();
+
             CurrentCode = NormaliseCode(code);
             IsHost = true;
 
             SubscribeToNetworkManager();
-            NetworkManager.Singleton.StartHost();
+            if (!NetworkManager.Singleton.StartHost())
+            {
+                Debug.LogError("[LobbyManager] StartHost failed — NetworkManager refused to start (already listening?).");
+                UnsubscribeFromNetworkManager();
+                IsHost = false;
+                OnConnectionFailed?.Invoke("Failed to start host. Please try again.");
+                return;
+            }
             RegisterPlayerCountMessageHandler();
 
             OnHostStarted?.Invoke(CurrentCode);
@@ -128,14 +137,50 @@ namespace SyncRush
                 return;
             }
 
+            ResetStaleSession();
+
             CurrentCode = normalised;
             IsHost = false;
 
             SubscribeToNetworkManager();
-            NetworkManager.Singleton.StartClient();
+            if (!NetworkManager.Singleton.StartClient())
+            {
+                Debug.LogError("[LobbyManager] StartClient failed — NetworkManager refused to start (already listening?).");
+                UnsubscribeFromNetworkManager();
+                OnConnectionFailed?.Invoke("Failed to connect. Please try again.");
+                return;
+            }
             RegisterPlayerCountMessageHandler();
 
             Debug.Log($"[LobbyManager] Joining with code: {CurrentCode}");
+        }
+
+        /// <summary>
+        /// Cancels an in-progress connection attempt (e.g. the user clicked Join then
+        /// Back before it resolved) without a full Disconnect+scene reload. Safe to
+        /// call even when nothing is in progress.
+        /// </summary>
+        public void CancelPendingConnection()
+        {
+            ResetStaleSession();
+            CurrentCode = string.Empty;
+            IsHost = false;
+        }
+
+        /// <summary>
+        /// Shuts down any still-listening NetworkManager left over from a previous,
+        /// abandoned attempt. Without this, StartHost/StartClient silently no-op —
+        /// NGO refuses to start while already listening — leaving IsHost/CurrentCode
+        /// claiming a session exists when the transport never actually started it.
+        /// </summary>
+        private void ResetStaleSession()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm != null && nm.IsListening)
+            {
+                UnsubscribeFromNetworkManager();
+                nm.Shutdown();
+            }
         }
 
         /// <summary>
@@ -186,6 +231,7 @@ namespace SyncRush
             var nm = NetworkManager.Singleton;
             if (nm == null) return;
 
+            UnsubscribeFromNetworkManager(); // guard against double-subscribing if called twice
             nm.OnClientConnectedCallback  += HandleClientConnected;
             nm.OnClientDisconnectCallback += HandleClientDisconnected;
         }

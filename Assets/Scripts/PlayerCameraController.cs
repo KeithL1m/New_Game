@@ -20,10 +20,10 @@ namespace SyncRush
         // ── Follow offset ─────────────────────────────────────────────────────
         [Header("Follow Offset")]
         [Tooltip("How far behind the player the camera sits.")]
-        [SerializeField] private float _distance = 5f;
+        [SerializeField] private float _distance = 7f;
 
         [Tooltip("How high above the player's root the camera sits.")]
-        [SerializeField] private float _height = 2.5f;
+        [SerializeField] private float _height = 4.5f;
 
         [Tooltip("How quickly the camera catches up. Higher = snappier.")]
         [SerializeField] private float _followSmoothing = 12f;
@@ -143,7 +143,22 @@ namespace SyncRush
                 ref _followVelocity,
                 smoothTime);
 
-            transform.LookAt(smoothedPlayerPos + Vector3.up * (_height * 0.4f));
+            // Rotation eased the same way position is — snapping LookAt straight to a
+            // target that only updates at the physics tick rate is what read as "jittery"
+            // while moving, since position had damping to hide that but rotation didn't.
+            //
+            // Look direction is computed from targetPos (the ideal, unlagged camera spot),
+            // not transform.position (the actual, SmoothDamp-lagged position). Using the
+            // lagged position here fed the camera's own follow-lag back into its rotation:
+            // targetPos jumps instantly with the player's forward vector on a fast turn,
+            // but transform.position hasn't caught up yet, so the look vector swung through
+            // a much wider angle than the turn itself, making the camera whip around.
+            Vector3 lookPoint = smoothedPlayerPos + Vector3.up * (_height * 0.4f);
+            Quaternion targetRotation = Quaternion.LookRotation(lookPoint - targetPos);
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                targetRotation,
+                1f - Mathf.Exp(-_followSmoothing * Time.deltaTime));
         }
 
         private void HandleCursorToggle()

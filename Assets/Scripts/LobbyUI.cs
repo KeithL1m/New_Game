@@ -78,7 +78,7 @@ namespace SyncRush
 
             // Join panel
             _joinConfirmButton.onClick.AddListener(OnJoinClicked);
-            _joinBackButton.onClick.AddListener(ShowMainPanel);
+            _joinBackButton.onClick.AddListener(OnJoinBackClicked);
             _joinCodeInput.onValueChanged.AddListener(val =>
             {
                 string upper = val.ToUpper();
@@ -159,6 +159,15 @@ namespace SyncRush
         private void OnLeaveClicked()
         {
             LobbyManager.Instance.Disconnect();
+        }
+
+        private void OnJoinBackClicked()
+        {
+            // A Join attempt starts connecting immediately on click, so leaving this
+            // panel before it resolves must cancel it — otherwise the NetworkManager
+            // is left listening as a client and the next Host attempt silently fails.
+            LobbyManager.Instance.CancelPendingConnection();
+            ShowMainPanel();
         }
 
         // ── LobbyManager event handlers ───────────────────────────────────────

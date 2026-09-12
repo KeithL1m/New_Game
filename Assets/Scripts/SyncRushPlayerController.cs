@@ -40,6 +40,10 @@ namespace SyncRush
         [Tooltip("Coyote-time window in seconds (GDD: 0.12 s).")]
         [SerializeField] private float _coyoteTime = 0.09f;
 
+        [Tooltip("How long a jump press is remembered before landing, so pressing jump slightly " +
+                 "early still fires once grounded — mirrors coyote time on the other side of contact.")]
+        [SerializeField] private float _jumpBufferTime = 0.15f;
+
         [Header("Stamina")]
         [SerializeField] private float _staminaMax = 1f;
 
@@ -55,9 +59,14 @@ namespace SyncRush
         // ── Runtime state ─────────────────────────────────────────────────────
         private CharacterController _cc;
         private Vector3 _velocity;
+        private Vector3 _externalVelocity; // horizontal knockback impulses (tether, pendulum, etc.), decays over time
         private float _coyoteTimer;
-        private bool _jumpQueued;
+        private float _jumpBufferTimer;
         private float _stamina;
+
+        [Header("Knockback")]
+        [Tooltip("How quickly a horizontal impulse (AddImpulse) decays back to zero. Higher = shorter-lived knockback.")]
+        [SerializeField] private float _externalVelocityDamping = 4f;
 
         // Interpolation — stores positions from the last two FixedUpdate ticks
         // so the camera can read a smoothly interpolated position every LateUpdate
@@ -191,12 +200,13 @@ namespace SyncRush
             }
 
             // ── Jump ─────────────────────────────────────────────────────────
-            if (_jumpQueued && _coyoteTimer > 0f)
+            _jumpBufferTimer -= dt;
+            if (_jumpBufferTimer > 0f && _coyoteTimer > 0f)
             {
                 _velocity.y = JumpSpeed;
                 _coyoteTimer = 0f;
+                _jumpBufferTimer = 0f;
             }
-            _jumpQueued = false;
 
             // ── Stamina ──────────────────────────────────────────────────────
             bool wantsSprint = _inputReader.SprintHeld && _stamina > 0f;
@@ -220,17 +230,28 @@ namespace SyncRush
 
             // ── Final move ───────────────────────────────────────────────────
             _previousPosition = _currentPosition;
-            Vector3 motion = new Vector3(horizontal.x, _velocity.y, horizontal.z);
+            Vector3 motion = new Vector3(
+                horizontal.x + _externalVelocity.x,
+                _velocity.y,
+                horizontal.z + _externalVelocity.z);
             _cc.Move(motion * dt);
             _currentPosition = transform.position;
+
+            // Knockback fades out over time rather than persisting forever or
+            // being instantly overwritten by input like _velocity.x/z would be.
+            _externalVelocity = Vector3.Lerp(_externalVelocity, Vector3.zero, dt * _externalVelocityDamping);
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
-        private void QueueJump() => _jumpQueued = true;
+        private void QueueJump() => _jumpBufferTimer = _jumpBufferTime;
 
-        /// <summary>Apply an external velocity impulse (used by Tether slingshot).</summary>
-        public void AddImpulse(Vector3 impulse) => _velocity += impulse;
+        /// <summary>Apply an external velocity impulse (used by Tether slingshot, pendulum/hazard knockback).</summary>
+        public void AddImpulse(Vector3 impulse)
+        {
+            _externalVelocity += new Vector3(impulse.x, 0f, impulse.z);
+            _velocity.y += impulse.y;
+        }
 
         /// <summary>Current stamina normalised 0–1 (for HUD display).</summary>
         public float StaminaNormalized => _stamina / _staminaMax;

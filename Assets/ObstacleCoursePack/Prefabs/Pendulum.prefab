@@ -11,7 +11,7 @@ GameObject:
   - component: {fileID: 5263193848945581322}
   - component: {fileID: 5263193848945581324}
   - component: {fileID: 5263193848945581323}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: Cylinder (1)
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -92,7 +92,7 @@ GameObject:
   - component: {fileID: 5263193849274771171}
   - component: {fileID: 5263193849274771170}
   - component: {fileID: 5263193849274771169}
-  m_Layer: 0
+  m_Layer: 8
   m_Name: Ball
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -168,7 +168,7 @@ SphereCollider:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 5263193849274771168}
   m_Material: {fileID: 13400000, guid: 4f9b3b62200b5134bb2c30750747a446, type: 2}
-  m_IsTrigger: 0
+  m_IsTrigger: 1
   m_Enabled: 1
   serializedVersion: 2
   m_Radius: 0.5
@@ -182,11 +182,27 @@ MonoBehaviour:
   m_GameObject: {fileID: 5263193849274771168}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: fdffcc51f538bef4c8abd3b5bbb6ff17, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  force: 25
-  stunTime: 0.5
+  m_Script: {fileID: 11500000, guid: a4e01c3f8cff49e98890d7210c31810f, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  _knockbackForce: 25
+  _upwardBoost: 7
+--- !u!54 &5263193850122822934
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5263193850122822931}
+  serializedVersion: 2
+  m_Mass: 500
+  m_Drag: 0
+  m_AngularDrag: 1
+  m_UseGravity: 0
+  m_IsKinematic: 1
+  m_Interpolate: 0
+  m_Constraints: 0
+  m_CollisionDetection: 0
 --- !u!1 &5263193850122822931
 GameObject:
   m_ObjectHideFlags: 0
@@ -197,7 +213,8 @@ GameObject:
   m_Component:
   - component: {fileID: 5263193850122822932}
   - component: {fileID: 5263193850122822933}
-  m_Layer: 0
+  - component: {fileID: 5263193850122822934}
+  m_Layer: 8
   m_Name: Pendulum
   m_TagString: Untagged
   m_Icon: {fileID: 0}
