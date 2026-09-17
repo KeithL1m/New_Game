@@ -1,80 +1,53 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
+// Rewritten from the original Time.deltaTime + Random.Range version: that relied on each
+// client's own unsynced RNG, which would desync a solid blocking wall across clients.
+// This version is a deterministic hold-at-top/hold-at-bottom cycle driven by ServerTime.
+[RequireComponent(typeof(Rigidbody))]
 public class WallMovable : MonoBehaviour
 {
-	public bool isDown = true; //If the wall starts down, if not you must modify to false
-	public bool isRandom = true; //If you want that the wall go down random
-	public float speed = 2f;
+    public float speed = 2f;
+    public float holdTime = 1f;
 
-	private float height; //Height of the platform
-	private float posYDown; //Start position of the Y coord
-	private bool isWaiting = false; //If the wall is waiting up or down
-	private bool canChange = true; //If the wall is thinking if should go down or not
+    [Tooltip("Shifts this instance's position in the cycle in seconds, so paired instances can move out of phase with each other.")]
+    public float timeOffsetSeconds = 0f;
 
-	void Awake()
+    private Rigidbody _rb;
+    private Vector3 _topPos;
+    private Vector3 _bottomPos;
+    private float _travelTime;
+    private float _cycleTime;
+
+    private void Awake()
     {
-		height = transform.localScale.y;
-		if(isDown)
-			posYDown = transform.position.y;
-		else
-			posYDown = transform.position.y - height;
-	}
+        _rb = GetComponent<Rigidbody>();
+        _rb.isKinematic = true;
+        float height = transform.localScale.y;
+        _topPos = transform.position;
+        _bottomPos = transform.position - new Vector3(0f, height, 0f);
+        _travelTime = height / speed;
+        _cycleTime = 2f * (_travelTime + holdTime);
+    }
 
-    // Update is called once per frame
-    void Update()
+    private void FixedUpdate()
     {
-		if (isDown)
-		{
-			if (transform.position.y < posYDown + height)
-			{
-				transform.position += Vector3.up * Time.deltaTime * speed;
-			}
-			else if (!isWaiting)
-				StartCoroutine(WaitToChange(0.25f));
-		}
-		else
-		{
-			if (!canChange)
-				return;
+        float time = NetworkManager.Singleton != null
+            ? NetworkManager.Singleton.ServerTime.TimeAsFloat
+            : Time.time;
+        time += timeOffsetSeconds;
 
-			if (transform.position.y > posYDown)
-			{
-				transform.position -= Vector3.up * Time.deltaTime * speed;
-			}
-			else if (!isWaiting)
-				StartCoroutine(WaitToChange(0.25f));
-		}
-	}
+        float t = time % _cycleTime;
+        Vector3 targetPos;
+        if (t < _travelTime)
+            targetPos = Vector3.Lerp(_topPos, _bottomPos, t / _travelTime);
+        else if (t < _travelTime + holdTime)
+            targetPos = _bottomPos;
+        else if (t < 2f * _travelTime + holdTime)
+            targetPos = Vector3.Lerp(_bottomPos, _topPos, (t - _travelTime - holdTime) / _travelTime);
+        else
+            targetPos = _topPos;
 
-	//Function that wait before go down or up
-	IEnumerator WaitToChange(float time)
-	{
-		isWaiting = true;
-		yield return new WaitForSeconds(time);
-		isWaiting = false;
-		isDown = !isDown;
-
-		if (isRandom && !isDown) //If is wall up and is random
-		{
-			int num = Random.Range(0, 2);
-			//Debug.Log(num);
-			if (num == 1)
-				StartCoroutine(Retry(1.5f));
-		}
-	}
-
-	//Function that checks every 1.25secs if can go down the wall
-	IEnumerator Retry(float time)
-	{
-		canChange = false;
-		yield return new WaitForSeconds(time);
-		int num = Random.Range(0, 2);
-		//Debug.Log("2-"+num);
-		if (num == 1)
-			StartCoroutine(Retry(1.25f));
-		else
-			canChange = true;
-	}
+        _rb.MovePosition(targetPos);
+    }
 }

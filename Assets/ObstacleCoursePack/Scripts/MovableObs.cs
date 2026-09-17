@@ -1,70 +1,40 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
+[RequireComponent(typeof(Rigidbody))]
 public class MovableObs : MonoBehaviour
 {
-	public float distance = 5f; //Distance that moves the object
-	public bool horizontal = true; //If the movement is horizontal or vertical
-	public float speed = 3f;
-	public float offset = 0f; //If yo want to modify the position at the start 
+    public float distance = 5f;
+    public bool horizontal = true;
+    public float speed = 3f;
+    public float offset = 0f;
 
-	private bool isForward = true; //If the movement is out
-	private Vector3 startPos;
-   
-    void Awake()
-    {
-		startPos = transform.position;
-		if (horizontal)
-			transform.position += Vector3.right * offset;
-		else
-			transform.position += Vector3.forward * offset;
-	}
+    [Tooltip("Shifts this instance's position in the ping-pong cycle in seconds, so paired instances can move out of phase with each other.")]
+    public float timeOffsetSeconds = 0f;
 
-    // Update is called once per frame
-    void Update()
+    private Rigidbody _rb;
+    private Vector3 _startPos;
+    private Vector3 _axis;
+
+    private void Awake()
     {
-		if (horizontal)
-		{
-			if (isForward)
-			{
-				if (transform.position.x < startPos.x + distance)
-				{
-					transform.position += Vector3.right * Time.deltaTime * speed;
-				}
-				else
-					isForward = false;
-			}
-			else
-			{
-				if (transform.position.x > startPos.x)
-				{
-					transform.position -= Vector3.right * Time.deltaTime * speed;
-				}
-				else
-					isForward = true;
-			}
-		}
-		else
-		{
-			if (isForward)
-			{
-				if (transform.position.z < startPos.z + distance)
-				{
-					transform.position += Vector3.forward * Time.deltaTime * speed;
-				}
-				else
-					isForward = false;
-			}
-			else
-			{
-				if (transform.position.z > startPos.z)
-				{
-					transform.position -= Vector3.forward * Time.deltaTime * speed;
-				}
-				else
-					isForward = true;
-			}
-		}
+        _rb = GetComponent<Rigidbody>();
+        _rb.isKinematic = true;
+        _axis = horizontal ? Vector3.right : Vector3.forward;
+        _startPos = transform.position + _axis * offset;
+    }
+
+    private void FixedUpdate()
+    {
+        float time = NetworkManager.Singleton != null
+            ? NetworkManager.Singleton.ServerTime.TimeAsFloat
+            : Time.time;
+        time += timeOffsetSeconds;
+
+        float halfPeriod = distance / speed;
+        float m = time % (2f * halfPeriod);
+        float travel = m <= halfPeriod ? speed * m : distance - speed * (m - halfPeriod);
+
+        _rb.MovePosition(_startPos + _axis * travel);
     }
 }
