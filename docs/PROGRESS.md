@@ -35,7 +35,7 @@ Last verified against repo: **2026-09-16**, on top of commit `3215c8d`.
 | System | Status | Where |
 |---|---|---|
 | `RaceStateMachine` | 🟨 Implemented, untested | `Assets/Scripts/RaceStateMachine.cs` — server-authoritative `WaitingToStart → Countdown → Racing → Results`. `FinalStretch` deliberately omitted until M1's tether exists to sever (GDD §5.6) |
-| `RaceCheckpoint` | 🟨 Implemented, untested | `Assets/Scripts/RaceCheckpoint.cs` — trigger gate with `Kind`/`Order`; gates in `GameScene` run `Starting`(0) → `Checkpoint`(1) → `Checkpoint2`(2) → `Checkpoint3`(3) → `Checkpoint4`(4) → `Checkpoint5`(5) → `Finish`(6), the last five added with the course expansion below |
+| `RaceCheckpoint` | 🟨 Implemented, untested | `Assets/Scripts/RaceCheckpoint.cs` — trigger gate with `Kind`/`Order`; gates in `GameScene` run `Starting`(0) → `Checkpoint`(1) → `Checkpoint2`(2) → `Checkpoint3`(3) → `Checkpoint4`(4) → `Checkpoint5`(5) → `Checkpoint6`(6) → `Finish`(7), the last five added with the course expansion below |
 | `PlayerRaceProgress` | 🟨 Implemented, untested | `Assets/Scripts/PlayerRaceProgress.cs`, added to `PlayerPrefab` — owner-writable checkpoint order (anti-shortcut: rejects out-of-sequence crossings), spawn/respawn placement, reports finish to `RaceStateMachine` via ServerRpc |
 | `DeathZone` | 🟨 Implemented, untested | `Assets/Scripts/DeathZone.cs`, attached to `Deathzone` (now a trigger) — respawns the player at their last checkpoint |
 | `SpawnPointRegistry` | 🟨 Implemented, untested | `Assets/Scripts/SpawnPointRegistry.cs`, attached to `SpawnPoints` in `GameScene`; reads its own children (`Spawn_0`–`Spawn_3`) as spawn points, assigned per client by `OwnerClientId % count` |
@@ -51,15 +51,15 @@ Last verified against repo: **2026-09-16**, on top of commit `3215c8d`.
 **Course expanded (2026-09-16):** the greybox course now has obstacle variety past the `RotationPlat` gauntlet instead of running straight into `Finish`. `Start`, `Platform`, `Platform (1)`/Pendulums, `Checkpoint`/`Platform (3)`, and the gauntlet itself are unchanged. `Platform (2)` is disabled (`MeshRenderer`/`MeshCollider` `enabled=false` — not deleted, reversible) since discrete tiles now serve as the floor instead. Sequence from the gauntlet exit (x≈-154.85), all tiles sized to match `RotationPlat`'s own proportions (12×0.25×5) with its ~2.2m gap convention:
 
 - **Launch pad tiles ×2** (`Tile_LaunchPad_1-2`, `Bounce.cs`) — single lane (z=7), x=-166/-180.2
-- **`Checkpoint2`** (`_order=2`) — rest platform + gate, x=-193.4
+- **`Checkpoint3`** (`_order=3`, renumbered 2026-09-18) — rest platform + gate, x=-193.4
 - **Spin bar tiles ×2** (`Tile_SpinBar_A/B`, 2 parallel lanes z=7/-8) — x=-206.6
-- **`Checkpoint3`** (`_order=3`) — x=-219.8
+- **`Checkpoint4`** (`_order=4`, was 3) — x=-219.8
 - **Hill** (continuous ramp/plateau/ramp, spans both lanes) — x=-229 to -237
-- **`Checkpoint4`** (`_order=4`) — x=-246.2
+- **`Checkpoint5`** (`_order=5`, was 4) — x=-246.2
 - **Sliding pillar tiles ×2** (2 parallel lanes) — x=-259.4
-- **`Checkpoint5`** (`_order=5`) — x=-272.6
+- **`Checkpoint6`** (`_order=6`, was 5) — x=-272.6
 - **Timing gate tiles ×2** (2 parallel lanes) — x=-285.8
-- **`Finish`** (`_order` bumped 2→6) — x=-304; `Deathzone` extended (was to x=-258.43, now to -334) to cover it
+- **`Finish`** (`_order` bumped 2→6, then 6→7 when the hand-placed big `Checkpoint2` gate at x≈-166.6 became order 2 with its own respawn point) — x=-304; `Deathzone` extended (was to x=-258.43, now to -334) to cover it
 
 `Bounce.cs`/`Rotator.cs`/`MovableObs.cs`/`WallMovable.cs` (from `Assets/ObstacleCoursePack/`) were rewritten from the pack's originals to work against `CharacterController` and this project's netcode/physics setup — each needs a kinematic `Rigidbody` (Unity only raises trigger/collision callbacks when at least one side of an overlap has one, and `CharacterController` has none) and `Rigidbody.Move*` rather than raw `transform` writes (`Physics.autoSyncTransforms` is disabled here). `Bounce` also moved from `OnCollisionEnter` (never fires against `CharacterController`) to a trigger + `SyncRushPlayerController.AddImpulse`. `RotationPlat` gauntlet `speed` reduced 60→40 after measuring via a scripted `CharacterController` rig that the real safe crossing window was ~0.62s/3s cycle.
 

@@ -49,8 +49,13 @@ namespace SyncRush
         private PlayerInputReader _inputReader;
         private bool _attached;
 
-        // SmoothDamp velocity reference — must persist between frames
-        private Vector3 _followVelocity;
+        // Smoothed anchor point (player position) and smoothed yaw. The camera offset
+        // is built from these two, so the camera orbits at a constant distance instead
+        // of cutting a chord across the turn. SmoothDamp velocities must persist.
+        private Vector3 _smoothedAnchor;
+        private Vector3 _anchorVelocity;
+        private float   _smoothedYaw;
+        private float   _yawVelocity;
 
         // ── Public API ────────────────────────────────────────────────────────
 
@@ -60,6 +65,13 @@ namespace SyncRush
             _playerController = playerRoot.GetComponent<SyncRushPlayerController>();
             _inputReader      = inputReader;
             _attached         = true;
+
+            _smoothedAnchor = _playerController != null
+                ? _playerController.InterpolatedPosition
+                : _playerRoot.position;
+            _smoothedYaw    = _playerRoot.eulerAngles.y;
+            _anchorVelocity = Vector3.zero;
+            _yawVelocity    = 0f;
 
             LockCursor(true);
         }
@@ -110,17 +122,32 @@ namespace SyncRush
         {
             // Use the interpolated position to eliminate FixedUpdate/LateUpdate
             // timing stutter — this gives a smooth position between physics ticks
-            Vector3 smoothedPlayerPos = _playerController != null
+            Vector3 playerPos = _playerController != null
                 ? _playerController.InterpolatedPosition
                 : _playerRoot.position;
 
-            float desiredDist = _distance;
+            float smoothTime = 1f / _followSmoothing;
+
+            // Smooth the anchor and the yaw separately, then build the offset from them.
+            // Smoothing the camera's world position directly makes it travel a straight
+            // line to the new spot on the orbit circle, which cuts inside the circle on
+            // a fast turn and reads as a zoom-in. Smoothing the angle keeps the camera
+            // on the circle at a constant distance.
+            _smoothedAnchor = Vector3.SmoothDamp(
+                _smoothedAnchor, playerPos, ref _anchorVelocity, smoothTime);
+            _smoothedYaw = Mathf.SmoothDampAngle(
+                _smoothedYaw, _playerRoot.eulerAngles.y, ref _yawVelocity, smoothTime);
+
+            Quaternion yawRot   = Quaternion.Euler(0f, _smoothedYaw, 0f);
+            Vector3    backward = yawRot * Vector3.back;
+            Vector3    probeOrigin = _smoothedAnchor + Vector3.up * _height;
 
             // ── Collision probe ──────────────────────────────────────────────
+            float desiredDist = _distance;
             if (Physics.SphereCast(
-                    smoothedPlayerPos + Vector3.up * _height,
+                    probeOrigin,
                     _collisionRadius,
-                    -_playerRoot.forward,
+                    backward,
                     out RaycastHit hit,
                     _distance,
                     _collisionMask,
@@ -129,36 +156,12 @@ namespace SyncRush
                 desiredDist = Mathf.Max(_collisionRadius * 2f, hit.distance - _collisionRadius);
             }
 
-            Vector3 targetPos = smoothedPlayerPos
-                                - _playerRoot.forward * desiredDist
-                                + Vector3.up * _height;
+            transform.position = probeOrigin + backward * desiredDist;
 
-            // ── SmoothDamp follow — frame-rate independent, no stutter ────────
-            // Unlike Lerp, SmoothDamp accumulates velocity so it produces
-            // consistent motion regardless of frame rate variation.
-            float smoothTime = 1f / _followSmoothing;
-            transform.position = Vector3.SmoothDamp(
-                transform.position,
-                targetPos,
-                ref _followVelocity,
-                smoothTime);
-
-            // Rotation eased the same way position is — snapping LookAt straight to a
-            // target that only updates at the physics tick rate is what read as "jittery"
-            // while moving, since position had damping to hide that but rotation didn't.
-            //
-            // Look direction is computed from targetPos (the ideal, unlagged camera spot),
-            // not transform.position (the actual, SmoothDamp-lagged position). Using the
-            // lagged position here fed the camera's own follow-lag back into its rotation:
-            // targetPos jumps instantly with the player's forward vector on a fast turn,
-            // but transform.position hasn't caught up yet, so the look vector swung through
-            // a much wider angle than the turn itself, making the camera whip around.
-            Vector3 lookPoint = smoothedPlayerPos + Vector3.up * (_height * 0.4f);
-            Quaternion targetRotation = Quaternion.LookRotation(lookPoint - targetPos);
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                targetRotation,
-                1f - Mathf.Exp(-_followSmoothing * Time.deltaTime));
+            // Camera position and look point both derive from the smoothed anchor, so the
+            // look vector is already stable and needs no extra rotation easing.
+            Vector3 lookPoint = _smoothedAnchor + Vector3.up * (_height * 0.4f);
+            transform.rotation = Quaternion.LookRotation(lookPoint - transform.position);
         }
 
         private void HandleCursorToggle()

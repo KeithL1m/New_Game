@@ -29,7 +29,7 @@ namespace SyncRush
                 away = -transform.forward;
             away.Normalize();
 
-            player.AddImpulse(away * _knockbackForce + Vector3.up * _upwardBoost);
+            player.AddImpulse(away * _knockbackForce + Vector3.up * _upwardBoost, this);
         }
     }
 }

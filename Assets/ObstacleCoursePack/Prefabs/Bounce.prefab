@@ -283,7 +283,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fdffcc51f538bef4c8abd3b5bbb6ff17, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Bounce
-  force: 18
+  force: 27
   horizontalKick: 3
   stunTime: 0.3
 --- !u!54 &1230471489969119631

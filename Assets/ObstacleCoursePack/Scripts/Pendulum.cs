@@ -19,8 +19,17 @@ public class Pendulum : MonoBehaviour
 		_rb = GetComponent<Rigidbody>();
 		_rb.isKinematic = true;
 
+		// Derived from this instance's scene position, not Random.Range: an unsynced
+		// per-client RNG gave every client a different phase, so the swing desynced.
+		// Every client loads the same scene, so the position (and hash) match everywhere.
 		if(randomStart)
-			random = Random.Range(0f, 1f);
+		{
+			Vector3 p = transform.position;
+			int hash = Mathf.RoundToInt(p.x * 100f) * 73856093
+				^ Mathf.RoundToInt(p.y * 100f) * 19349663
+				^ Mathf.RoundToInt(p.z * 100f) * 83492791;
+			random = (hash & 0x7FFFFFFF) % 1000 / 1000f;
+		}
 	}
 
     // Driven from FixedUpdate via Rigidbody.MoveRotation (not a direct transform

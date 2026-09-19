@@ -68,6 +68,25 @@ namespace SyncRush
         [Tooltip("How quickly a horizontal impulse (AddImpulse) decays back to zero. Higher = shorter-lived knockback.")]
         [SerializeField] private float _externalVelocityDamping = 4f;
 
+        [Header("Moving Platforms")]
+        [Tooltip("A moving platform carries the player while its surface is within this many degrees of level. " +
+                 "Steeper than this and the player is no longer carried and slides off instead.")]
+        [SerializeField] private float _platformCarryAngle = 15f;
+
+        [Tooltip("Speed in m/s at which a tilted moving platform slides the player down its surface.")]
+        [SerializeField] private float _platformSlideSpeed = 6f;
+
+        // Moving-platform state. Contact is stored in the platform's local space so the carry
+        // is exactly how far that point on the platform moved since the previous tick.
+        private Transform _platform;
+        private Vector3 _platformLocalContact;
+        private Vector3 _platformLastWorldContact;
+        private Vector3 _platformSlideDir;
+        private bool _platformFlat;
+        private Transform _platformHitThisMove;
+        private Vector3 _platformHitPoint;
+        private Vector3 _platformHitNormal;
+
         // Interpolation — stores positions from the last two FixedUpdate ticks
         // so the camera can read a smoothly interpolated position every LateUpdate
         private Vector3 _previousPosition;
@@ -229,13 +248,34 @@ namespace SyncRush
             _velocity.y -= _gravity * GravityMultiplier * dt;
 
             // ── Final move ───────────────────────────────────────────────────
+            // ── Moving platform: carry while roughly level, slide off when tilted ──
+            // CharacterController doesn't ride kinematic colliders, it only gets shoved out of
+            // them, which read as random pushes. So ride explicitly, but only while the surface
+            // is near-level — past that the player slides, keeping the spin timing challenge.
+            Vector3 platformCarry = Vector3.zero;
+            Vector3 platformSlide = Vector3.zero;
+            if (_platform != null)
+            {
+                if (_platformFlat)
+                    platformCarry = _platform.TransformPoint(_platformLocalContact) - _platformLastWorldContact;
+                else
+                    platformSlide = _platformSlideDir * _platformSlideSpeed;
+            }
+            _platformHitThisMove = null;
+
             _previousPosition = _currentPosition;
+            Vector3 positionBeforeMove = transform.position;
             Vector3 motion = new Vector3(
                 horizontal.x + _externalVelocity.x,
                 _velocity.y,
                 horizontal.z + _externalVelocity.z);
-            _cc.Move(motion * dt);
+            motion += platformSlide;
+            Vector3 step = motion * dt + platformCarry;
+            _cc.Move(step);
             _currentPosition = transform.position;
+            DebugLogUnexpectedMotion(positionBeforeMove, step, platformCarry, platformSlide);
+
+            UpdatePlatformContact();
 
             // Knockback fades out over time rather than persisting forever or
             // being instantly overwritten by input like _velocity.x/z would be.
@@ -244,13 +284,92 @@ namespace SyncRush
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
+        // ── TEMP DEBUG: find what pushes the player with no input. Remove when found. ──
+        [Header("Debug")]
+        [SerializeField] private bool _debugLogPushes = true;
+        private string _lastHitName;
+
+        private void OnControllerColliderHit(ControllerColliderHit hit)
+        {
+            _lastHitName = hit.collider.name;
+
+            // Keep the most upward-facing contact this Move as the thing we're standing on.
+            // Only moving (kinematic-body) surfaces count; static ramps are left to CharacterController.
+            var rb = hit.collider.attachedRigidbody;
+            if (rb == null || !rb.isKinematic || hit.normal.y < 0.3f) return;
+            if (_platformHitThisMove != null && hit.normal.y <= _platformHitNormal.y) return;
+
+            _platformHitThisMove = rb.transform;
+            _platformHitPoint    = hit.point;
+            _platformHitNormal   = hit.normal;
+        }
+
+        private void UpdatePlatformContact()
+        {
+            if (_platformHitThisMove == null)
+            {
+                _platform = null;
+                return;
+            }
+
+            _platform                 = _platformHitThisMove;
+            _platformLocalContact     = _platform.InverseTransformPoint(_platformHitPoint);
+            _platformLastWorldContact = _platformHitPoint;
+            _platformFlat             = _platformHitNormal.y >= Mathf.Cos(_platformCarryAngle * Mathf.Deg2Rad);
+            _platformSlideDir         = Vector3.ProjectOnPlane(Vector3.down, _platformHitNormal).normalized;
+        }
+
+        private void DebugLogImpulse(string kind, Vector3 v, Object source)
+        {
+            if (_debugLogPushes)
+                Debug.Log($"[PushDebug] {kind} {v} from '{(source != null ? source.name : "unknown")}'", source);
+        }
+
+        private float _debugNextLogTime;
+
+        private void DebugLogUnexpectedMotion(Vector3 before, Vector3 intended, Vector3 carry, Vector3 slide)
+        {
+            if (!_debugLogPushes || Time.time < _debugNextLogTime) return;
+
+            Vector3 actual = transform.position - before;
+            Vector3 extra = actual - intended;
+            extra.y = 0f;
+            if (extra.magnitude < 0.05f) return;
+            _debugNextLogTime = Time.time + 0.25f;
+
+            Vector3 want = new Vector3(intended.x, 0f, intended.z);
+            // Extra pointing against the intended move is just being blocked; only the rest is a push.
+            string kind = want.sqrMagnitude > 0.0001f && Vector3.Dot(extra, want) < 0f ? "BLOCKED" : "PUSHED";
+            Vector3 local = transform.InverseTransformDirection(extra);
+            Debug.Log($"[PushDebug] {kind} {extra.magnitude:F2}m world({extra.x:F2},{extra.z:F2}) " +
+                      $"player-local(right {local.x:F2}, fwd {local.z:F2}) | wanted {want.magnitude:F2}m " +
+                      $"| carry {carry.magnitude:F2}m slide {slide.magnitude:F2}m/s | " +
+                      $"platform '{(_platform != null ? _platform.name : "none")}' flat={_platformFlat} " +
+                      $"normalY={_platformHitNormal.y:F2} | last touched '{_lastHitName}' grounded={_cc.isGrounded}");
+        }
+
         private void QueueJump() => _jumpBufferTimer = _jumpBufferTime;
 
         /// <summary>Apply an external velocity impulse (used by Tether slingshot, pendulum/hazard knockback).</summary>
-        public void AddImpulse(Vector3 impulse)
+        public void AddImpulse(Vector3 impulse, Object source = null)
         {
+            DebugLogImpulse("AddImpulse", impulse, source);
             _externalVelocity += new Vector3(impulse.x, 0f, impulse.z);
             _velocity.y += impulse.y;
+        }
+
+        /// <summary>
+        /// Overwrite (not add to) the current vertical and knockback velocity. Use for
+        /// bounce pads, where repeated contact must give the same launch every time
+        /// instead of stacking like AddImpulse does. Upward speed only ever goes up
+        /// here, so two overlapping pad triggers resolve to the stronger one no matter
+        /// which fires first.
+        /// </summary>
+        public void Launch(Vector3 velocity, Object source = null)
+        {
+            DebugLogImpulse("Launch", velocity, source);
+            _externalVelocity = new Vector3(velocity.x, 0f, velocity.z);
+            _velocity.y = Mathf.Max(_velocity.y, velocity.y);
         }
 
         /// <summary>Current stamina normalised 0–1 (for HUD display).</summary>

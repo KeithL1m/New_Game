@@ -278,7 +278,7 @@ MonoBehaviour:
   _inputReader: {fileID: 11400000, guid: 1353e8d3e0fb8654aaddcee9f604af93, type: 2}
   _baseSpeed: 7
   _sprintSpeed: 14
-  _airControl: 0.4
+  _airControl: 0.8
   _jumpHeight: 3.5
   _coyoteTime: 0.15
   _jumpBufferTime: 0.15

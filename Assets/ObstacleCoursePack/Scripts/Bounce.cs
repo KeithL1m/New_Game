@@ -20,7 +20,12 @@ public class Bounce : MonoBehaviour
     [Tooltip("Sideways nudge based on how far off-center you land. Keep well below force so it reads as a bounce, not a shove.")]
     public float horizontalKick = 3f;
 
+    [Tooltip("Minimum seconds between launches, so one landing can't trigger the pad twice.")]
+    public float retriggerCooldown = 0.3f;
+
     public float stunTime = 0.3f; // not yet wired up — SyncRushPlayerController has no stun state
+
+    private float _nextAllowedTime;
 
     private void Awake()
     {
@@ -47,6 +52,12 @@ public class Bounce : MonoBehaviour
         away.y = 0f;
         away = away.sqrMagnitude < 0.0001f ? Vector3.zero : away.normalized;
 
-        player.AddImpulse(away * horizontalKick + Vector3.up * force);
+        // Launch overwrites velocity instead of adding to it, and the cooldown stops the
+        // player's multiple colliders / re-contact on the way up from firing it again —
+        // either one alone would let repeated contact stack into a bigger and bigger launch.
+        if (Time.time < _nextAllowedTime) return;
+        _nextAllowedTime = Time.time + retriggerCooldown;
+
+        player.Launch(away * horizontalKick + Vector3.up * force, this);
     }
 }
