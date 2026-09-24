@@ -25,7 +25,12 @@ public class Bounce : MonoBehaviour
 
     public float stunTime = 0.3f; // not yet wired up — SyncRushPlayerController has no stun state
 
-    private float _nextAllowedTime;
+    // Keyed per player, not a single float: every client runs this trigger locally against
+    // every player replica on that machine (owner and non-owner alike), since a bounce pad
+    // isn't a NetworkBehaviour. A shared cooldown meant one player's touch — even a non-owner
+    // replica, whose Launch() call is otherwise inert — could silently eat the next player's
+    // real bounce if they landed within retriggerCooldown of each other on the same client.
+    private readonly System.Collections.Generic.Dictionary<SyncRushPlayerController, float> _nextAllowedTime = new();
 
     private void Awake()
     {
@@ -55,8 +60,8 @@ public class Bounce : MonoBehaviour
         // Launch overwrites velocity instead of adding to it, and the cooldown stops the
         // player's multiple colliders / re-contact on the way up from firing it again —
         // either one alone would let repeated contact stack into a bigger and bigger launch.
-        if (Time.time < _nextAllowedTime) return;
-        _nextAllowedTime = Time.time + retriggerCooldown;
+        if (_nextAllowedTime.TryGetValue(player, out float next) && Time.time < next) return;
+        _nextAllowedTime[player] = Time.time + retriggerCooldown;
 
         player.Launch(away * horizontalKick + Vector3.up * force, this);
     }

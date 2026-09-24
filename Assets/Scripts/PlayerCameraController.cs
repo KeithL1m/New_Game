@@ -8,7 +8,8 @@ namespace SyncRush
     /// Behaviour:
     ///   - Camera is locked at a fixed offset behind and above the player.
     ///   - Mouse X / right stick X rotates the PLAYER (yaw). The camera follows.
-    ///   - No free orbit — the camera never drifts from the player's back.
+    ///   - Mouse Y / right stick Y tilts the camera up and down around the player (pitch).
+    ///   - No free yaw orbit — the camera never drifts from the player's back.
     ///   - Smooth positional follow via LateUpdate lerp.
     ///   - SphereCast collision pulls the camera in if geometry is in the way.
     ///   - Cursor is locked on attach, released on Escape.
@@ -36,6 +37,17 @@ namespace SyncRush
         [Tooltip("Gamepad right stick sensitivity in degrees per second.")]
         [SerializeField] private float _stickSensitivity = 90f;
 
+        // ── Pitch ─────────────────────────────────────────────────────────────
+        [Header("Pitch")]
+        [Tooltip("Lowest camera angle in degrees (negative = camera below the player, looking up).")]
+        [SerializeField] private float _minPitch = -30f;
+
+        [Tooltip("Highest camera angle in degrees (camera above the player, looking down).")]
+        [SerializeField] private float _maxPitch = 70f;
+
+        [Tooltip("Flip vertical look: pushing the mouse up looks down.")]
+        [SerializeField] private bool _invertY = false;
+
         // ── Collision ─────────────────────────────────────────────────────────
         [Header("Collision")]
         [Tooltip("Radius of the sphere used to probe for geometry between player and camera.")]
@@ -49,13 +61,22 @@ namespace SyncRush
         private PlayerInputReader _inputReader;
         private bool _attached;
 
-        // Smoothed anchor point (player position) and smoothed yaw. The camera offset
-        // is built from these two, so the camera orbits at a constant distance instead
-        // of cutting a chord across the turn. SmoothDamp velocities must persist.
+        // Smoothed anchor point (player position). The camera offset is built from it plus
+        // the player's yaw, so the camera orbits at a constant distance instead of cutting
+        // a chord across the turn. The SmoothDamp velocity must persist.
         private Vector3 _smoothedAnchor;
         private Vector3 _anchorVelocity;
-        private float   _smoothedYaw;
-        private float   _yawVelocity;
+        private readonly RaycastHit[] _probeHits = new RaycastHit[16];
+        private float   _pitch; // degrees; positive = camera above the pivot, looking down
+
+        // The camera orbits a pivot at _height * LookHeightFraction above the player. The
+        // default pitch is whatever angle _height / _distance already produced, so the
+        // resting view is unchanged and mouse Y just tilts it from there.
+        private const float LookHeightFraction = 0.4f;
+
+        private float PivotHeight  => _height * LookHeightFraction;
+        private float OrbitRadius  => Mathf.Sqrt(_distance * _distance + (_height - PivotHeight) * (_height - PivotHeight));
+        private float DefaultPitch => Mathf.Atan2(_height - PivotHeight, _distance) * Mathf.Rad2Deg;
 
         // ── Public API ────────────────────────────────────────────────────────
 
@@ -69,9 +90,8 @@ namespace SyncRush
             _smoothedAnchor = _playerController != null
                 ? _playerController.InterpolatedPosition
                 : _playerRoot.position;
-            _smoothedYaw    = _playerRoot.eulerAngles.y;
             _anchorVelocity = Vector3.zero;
-            _yawVelocity    = 0f;
+            _pitch          = Mathf.Clamp(DefaultPitch, _minPitch, _maxPitch);
 
             LockCursor(true);
         }
@@ -116,6 +136,10 @@ namespace SyncRush
 
             float yawDelta = look.x * sensitivity;
             _playerRoot.Rotate(0f, yawDelta, 0f, Space.World);
+
+            // Mouse up = look up = camera swings down, so pitch decreases.
+            float pitchDelta = look.y * sensitivity * (_invertY ? -1f : 1f);
+            _pitch = Mathf.Clamp(_pitch - pitchDelta, _minPitch, _maxPitch);
         }
 
         private void FollowPlayer()
@@ -128,40 +152,49 @@ namespace SyncRush
 
             float smoothTime = 1f / _followSmoothing;
 
-            // Smooth the anchor and the yaw separately, then build the offset from them.
-            // Smoothing the camera's world position directly makes it travel a straight
-            // line to the new spot on the orbit circle, which cuts inside the circle on
-            // a fast turn and reads as a zoom-in. Smoothing the angle keeps the camera
-            // on the circle at a constant distance.
+            // Only the anchor (player position) is smoothed. Yaw is taken straight from the
+            // player, because the mouse already drives it: smoothing it too acts as a low-pass
+            // filter, so fast left-right swipes cancel out and the camera barely follows while
+            // the character spins. The offset is still built from a yaw angle around the
+            // smoothed anchor, so the camera orbits at a constant distance instead of cutting
+            // a chord across the turn.
             _smoothedAnchor = Vector3.SmoothDamp(
                 _smoothedAnchor, playerPos, ref _anchorVelocity, smoothTime);
-            _smoothedYaw = Mathf.SmoothDampAngle(
-                _smoothedYaw, _playerRoot.eulerAngles.y, ref _yawVelocity, smoothTime);
 
-            Quaternion yawRot   = Quaternion.Euler(0f, _smoothedYaw, 0f);
-            Vector3    backward = yawRot * Vector3.back;
-            Vector3    probeOrigin = _smoothedAnchor + Vector3.up * _height;
+            // The camera orbits a pivot above the player: yaw follows the player, pitch is the
+            // mouse-controlled elevation angle. Direction from pivot to camera is "back",
+            // tilted up by _pitch.
+            Quaternion orbitRot = Quaternion.Euler(_pitch, _playerRoot.eulerAngles.y, 0f);
+            Vector3    toCamera = orbitRot * Vector3.back;
+            Vector3    pivot    = _smoothedAnchor + Vector3.up * PivotHeight;
+            float      radius   = OrbitRadius;
 
             // ── Collision probe ──────────────────────────────────────────────
-            float desiredDist = _distance;
-            if (Physics.SphereCast(
-                    probeOrigin,
-                    _collisionRadius,
-                    backward,
-                    out RaycastHit hit,
-                    _distance,
-                    _collisionMask,
-                    QueryTriggerInteraction.Ignore))
+            // The pivot trails the player while it moves (SmoothDamp lag grows with speed), so
+            // sprinting can leave it outside the player's own colliders. Swinging the camera
+            // round then casts straight through the player's body; that hit has to be ignored
+            // or the camera collapses into the pivot. Take the nearest hit that isn't the player.
+            float nearest = radius;
+            bool  blocked = false;
+            int   count   = Physics.SphereCastNonAlloc(
+                pivot, _collisionRadius, toCamera, _probeHits, radius,
+                _collisionMask, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < count; i++)
             {
-                desiredDist = Mathf.Max(_collisionRadius * 2f, hit.distance - _collisionRadius);
+                RaycastHit h = _probeHits[i];
+                if (h.collider.transform.IsChildOf(_playerRoot)) continue;
+                if (h.distance < nearest) { nearest = h.distance; blocked = true; }
             }
 
-            transform.position = probeOrigin + backward * desiredDist;
+            float desiredDist = blocked
+                ? Mathf.Max(_collisionRadius * 2f, nearest - _collisionRadius)
+                : radius;
+
+            transform.position = pivot + toCamera * desiredDist;
 
             // Camera position and look point both derive from the smoothed anchor, so the
             // look vector is already stable and needs no extra rotation easing.
-            Vector3 lookPoint = _smoothedAnchor + Vector3.up * (_height * 0.4f);
-            transform.rotation = Quaternion.LookRotation(lookPoint - transform.position);
+            transform.rotation = Quaternion.LookRotation(pivot - transform.position);
         }
 
         private void HandleCursorToggle()

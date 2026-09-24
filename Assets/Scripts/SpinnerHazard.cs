@@ -22,10 +22,57 @@ namespace SyncRush
         [Tooltip("Extra upward speed so hits arc away instead of sliding along the ground.")]
         [SerializeField] private float _upwardBoost = 7f;
 
+        [Tooltip("Seconds before the same player can be launched again. The bar has several " +
+                 "trigger colliders, each raising its own OnTriggerEnter for one contact.")]
+        [SerializeField] private float _relaunchLockout = 0.5f;
+
+        private readonly System.Collections.Generic.Dictionary<SyncRushPlayerController, float> _nextLaunchTime = new();
+
         private Quaternion _lastRotation;
         private Vector3 _angularVelocity; // world space, rad/s
 
-        private void Awake() => _lastRotation = transform.rotation;
+        [Tooltip("How far, in metres, the hit zone extends past the bar's solid collider on every side. " +
+                 "Applied at runtime so it stays this size at any object scale.")]
+        [SerializeField] private float _contactMargin = 0.3f;
+
+        private void Awake()
+        {
+            _lastRotation = transform.rotation;
+            FitTriggersToSolidColliders();
+        }
+
+        /// <summary>
+        /// Each solid box collider on the bar has a trigger box next to it that catches the hit.
+        /// Trigger sizes are in local units, so a size tuned at one scale balloons when the bar
+        /// is scaled up. Re-derive each trigger from its solid partner plus a fixed world margin.
+        /// </summary>
+        private void FitTriggersToSolidColliders()
+        {
+            foreach (var trigger in GetComponentsInChildren<BoxCollider>())
+            {
+                if (!trigger.isTrigger) continue;
+
+                BoxCollider solid = null;
+                foreach (var candidate in trigger.GetComponents<BoxCollider>())
+                {
+                    if (!candidate.isTrigger) { solid = candidate; break; }
+                }
+                if (solid == null) continue;
+
+                // World length of each local axis, so the margin is metres regardless of scale.
+                Matrix4x4 m = trigger.transform.localToWorldMatrix;
+                Vector3 size = solid.size;
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    float worldPerLocal = m.GetColumn(axis).magnitude;
+                    if (worldPerLocal > 0.0001f)
+                        size[axis] += 2f * _contactMargin / worldPerLocal;
+                }
+
+                trigger.center = solid.center;
+                trigger.size = size;
+            }
+        }
 
         private void FixedUpdate()
         {
@@ -43,6 +90,9 @@ namespace SyncRush
         {
             var player = other.GetComponentInParent<SyncRushPlayerController>();
             if (player == null) return;
+
+            if (_nextLaunchTime.TryGetValue(player, out float next) && Time.time < next) return;
+            _nextLaunchTime[player] = Time.time + _relaunchLockout;
 
             Vector3 offset = player.transform.position - transform.position;
             Vector3 push = Vector3.Cross(_angularVelocity, offset);

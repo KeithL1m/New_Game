@@ -92,6 +92,13 @@ namespace SyncRush
         private Vector3 _previousPosition;
         private Vector3 _currentPosition;
 
+        // The root transform only moves on FixedUpdate ticks, so a mesh parented directly to it
+        // steps at the physics rate while the camera glides on InterpolatedPosition; the two
+        // beat against each other and read as camera jitter. The Model child is drawn at the
+        // interpolated position instead so mesh and camera share one smooth path.
+        private Transform _visual;
+        private bool _interpolationActive;
+
         // Derived jump speed: v = sqrt(2 * g * h)
         private float JumpSpeed => Mathf.Sqrt(2f * _gravity * _jumpHeight);
 
@@ -133,6 +140,7 @@ namespace SyncRush
             }
 
             _inputReader.OnJumpPressed += QueueJump;
+            _visual = transform.Find("Model");
 
             // ── Camera attachment ─────────────────────────────────────────────
             // The player spawns as soon as the client connects, which happens
@@ -263,6 +271,14 @@ namespace SyncRush
             }
             _platformHitThisMove = null;
 
+            // First tick, or something teleported the root (respawn): restart interpolation from
+            // here instead of lerping across the jump from the stale position.
+            if (!_interpolationActive || (transform.position - _currentPosition).sqrMagnitude > 0.01f)
+            {
+                _currentPosition = transform.position;
+                _interpolationActive = true;
+            }
+
             _previousPosition = _currentPosition;
             Vector3 positionBeforeMove = transform.position;
             Vector3 motion = new Vector3(
@@ -280,6 +296,16 @@ namespace SyncRush
             // Knockback fades out over time rather than persisting forever or
             // being instantly overwritten by input like _velocity.x/z would be.
             _externalVelocity = Vector3.Lerp(_externalVelocity, Vector3.zero, dt * _externalVelocityDamping);
+        }
+
+        private void LateUpdate()
+        {
+            if (_visual == null) return;
+
+            if (_interpolationActive)
+                _visual.position = InterpolatedPosition;
+            else
+                _visual.localPosition = Vector3.zero;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
