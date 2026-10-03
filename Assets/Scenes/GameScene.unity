@@ -3808,7 +3808,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SyncRush.RaceCheckpoint
   _kind: 2
-  _order: 7
+  _order: 3
   _respawnPoint: {x: -304, y: 32.9615, z: 7}
 --- !u!65 &1077530221
 BoxCollider:
@@ -3859,6 +3859,7 @@ GameObject:
   - component: {fileID: 1121415859}
   - component: {fileID: 1121415858}
   - component: {fileID: 1121415860}
+  - component: {fileID: 1121415861}
   m_Layer: 0
   m_Name: RaceManager
   m_TagString: Untagged
@@ -3922,6 +3923,18 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   _startDelay: 3
   _countdownDuration: 3
+--- !u!114 &1121415861
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1121415857}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 013846ecad1a4da4eb411577ae0a2dda, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SyncRush.RaceResultsPopup
 --- !u!1 &1166426209
 GameObject:
   m_ObjectHideFlags: 0

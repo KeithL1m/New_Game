@@ -233,8 +233,7 @@ public class RebuildLobbyUI
         // ════════════════════════════════════════════════════════════════════
         var hostPanel = MakePanel("HostPanel", canvasGO.transform, bg, false);
         MakeTMP("HostTitle",        hostPanel.transform, "CREATE LOBBY",                          48, white, new Vector2(0, 160), new Vector2(600, 70));
-        MakeTMP("HostInstructions", hostPanel.transform, "Choose a 6-character code for your lobby.\nShare it with your friends.", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 80), new Vector2(700, 70));
-        var hostCodeInput  = MakeInputField("HostCodeInput",  hostPanel.transform, "e.g. ABC123", new Vector2(0, -10),  new Vector2(400, 65));
+        MakeTMP("HostInstructions", hostPanel.transform, "Start a lobby to get a 6-character join code.\nShare it with your friends.", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 80), new Vector2(700, 70));
         var hostErrorText  = MakeErrorLabel("HostErrorText",  hostPanel.transform, new Vector2(0, -68));
         var startHostBtn   = MakeButton("StartHostButton",    hostPanel.transform, "START LOBBY", new Vector2(0, -150), new Vector2(320, 70), blue);
         var hostBackBtn    = MakeButton("HostBackButton",     hostPanel.transform, "BACK",        new Vector2(0, -240), new Vector2(200, 55), grey);
@@ -258,7 +257,8 @@ public class RebuildLobbyUI
         var codeDisplay     = MakeTMP("CodeDisplay",    waitingPanel.transform, "Your Code: ------", 34, white,   new Vector2(0, 120), new Vector2(700, 55));
         var statusText      = MakeTMP("StatusText",     waitingPanel.transform, "Waiting for players...", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 55), new Vector2(700, 40));
         var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 0),   new Vector2(400, 50));
-        var leaveBtn        = MakeButton("LeaveButton", waitingPanel.transform, "LEAVE LOBBY",     new Vector2(0, -130), new Vector2(280, 60), red);
+        var startGameBtn    = MakeButton("StartGameButton", waitingPanel.transform, "START GAME",  new Vector2(0, -80),  new Vector2(320, 70), new Color(0.1f, 0.7f, 0.3f));
+        var leaveBtn        = MakeButton("LeaveButton", waitingPanel.transform, "LEAVE LOBBY",     new Vector2(0, -165), new Vector2(280, 60), red);
 
         // ── Wire LobbyUI ──────────────────────────────────────────────────────
         var lobbyUI = canvasGO.AddComponent<LobbyUI>();
@@ -272,7 +272,6 @@ public class RebuildLobbyUI
         so.FindProperty("_hostButton").objectReferenceValue   = hostBtn;
         so.FindProperty("_joinButton").objectReferenceValue   = joinBtn;
 
-        so.FindProperty("_hostCodeInput").objectReferenceValue    = hostCodeInput;
         so.FindProperty("_startHostButton").objectReferenceValue  = startHostBtn;
         so.FindProperty("_hostBackButton").objectReferenceValue   = hostBackBtn;
         so.FindProperty("_hostErrorText").objectReferenceValue    = hostErrorText;
@@ -285,6 +284,7 @@ public class RebuildLobbyUI
         so.FindProperty("_waitingCodeDisplay").objectReferenceValue = codeDisplay;
         so.FindProperty("_waitingStatusText").objectReferenceValue  = statusText;
         so.FindProperty("_playerCountText").objectReferenceValue    = playerCountText;
+        so.FindProperty("_startGameButton").objectReferenceValue    = startGameBtn;
         so.FindProperty("_leaveButton").objectReferenceValue        = leaveBtn;
 
         so.ApplyModifiedPropertiesWithoutUndo();

@@ -35,6 +35,12 @@ namespace SyncRush
         private readonly NetworkList<ulong> _finishOrder = new();
 
         public RaceState State => _state.Value;
+
+        /// <summary>Number of players who have crossed the Finish so far (synced to all clients).</summary>
+        public int FinishCount => _finishOrder.Count;
+
+        /// <summary>Client ID of the player who finished in the given 0-based place.</summary>
+        public ulong GetFinisher(int place) => _finishOrder[place];
         public event Action<RaceState> OnStateChanged;
 
         private void Awake()

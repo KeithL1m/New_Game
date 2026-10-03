@@ -12,6 +12,9 @@ namespace SyncRush
         [Tooltip("Extra upward speed added to the knockback so hits arc away instead of just sliding.")]
         [SerializeField] private float _upwardBoost = 7f;
 
+        [Tooltip("Seconds of hit-stun (no movement input, no airborne knockback decay) after a hit.")]
+        [SerializeField] private float _stunTime = 0.6f;
+
         private void Reset()
         {
             GetComponent<Collider>().isTrigger = true;
@@ -29,7 +32,9 @@ namespace SyncRush
                 away = -transform.forward;
             away.Normalize();
 
-            player.AddImpulse(away * _knockbackForce + Vector3.up * _upwardBoost, this);
+            // Knockback overwrites rather than adds, so the player's two colliders both entering
+            // the ball on the same tick no longer stack into a double-strength hit.
+            player.Knockback(away * _knockbackForce + Vector3.up * _upwardBoost, _stunTime, this);
         }
     }
 }

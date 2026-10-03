@@ -26,6 +26,14 @@ namespace SyncRush
                  "trigger colliders, each raising its own OnTriggerEnter for one contact.")]
         [SerializeField] private float _relaunchLockout = 0.5f;
 
+        [Tooltip("Seconds of hit-stun (no movement input, no airborne knockback decay) after a hit.")]
+        [SerializeField] private float _stunTime = 0.6f;
+
+        [Tooltip("Knockback is at least this multiple of the bar's speed at the contact point. A long " +
+                 "bar's outer end outruns a fixed knockback, catches up and re-hits the player along " +
+                 "its swing, which reads as being carried.")]
+        [SerializeField] private float _outrunFactor = 1.3f;
+
         private readonly System.Collections.Generic.Dictionary<SyncRushPlayerController, float> _nextLaunchTime = new();
 
         private Quaternion _lastRotation;
@@ -86,7 +94,9 @@ namespace SyncRush
             _lastRotation = transform.rotation;
         }
 
-        private void OnTriggerEnter(Collider other)
+        // Stay, not Enter: Enter fires once per contact, so a player still inside the hit zone
+        // when the lockout expires was never hit again and the bar swept straight through them.
+        private void OnTriggerStay(Collider other)
         {
             var player = other.GetComponentInParent<SyncRushPlayerController>();
             if (player == null) return;
@@ -97,6 +107,7 @@ namespace SyncRush
             Vector3 offset = player.transform.position - transform.position;
             Vector3 push = Vector3.Cross(_angularVelocity, offset);
             push.y = 0f;
+            float speed = Mathf.Max(_knockbackForce, push.magnitude * _outrunFactor);
 
             // Player at the hub (or bar barely moving): fall back to pushing straight away.
             if (push.sqrMagnitude < 0.0001f)
@@ -106,7 +117,7 @@ namespace SyncRush
                 if (push.sqrMagnitude < 0.0001f) push = -transform.forward;
             }
 
-            player.Launch(push.normalized * _knockbackForce + Vector3.up * _upwardBoost, this);
+            player.Knockback(push.normalized * speed + Vector3.up * _upwardBoost, _stunTime, this);
         }
     }
 }

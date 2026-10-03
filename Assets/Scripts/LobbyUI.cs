@@ -8,8 +8,12 @@ namespace SyncRush
     /// Drives the Sync Rush lobby canvas.
     ///
     /// Panel flow:
-    ///   MainPanel  ──[Host]──>  HostPanel  ──[Start Host]──>  WaitingPanel
-    ///              ──[Join]──>  JoinPanel  ──[Join]────────>  WaitingPanel
+    ///   MainPanel  ──[Host]──>  HostPanel  ──[Start Lobby]──>  WaitingPanel
+    ///              ──[Join]──>  JoinPanel  ──[Join]─────────>  WaitingPanel
+    ///
+    /// Relay generates the join code when the host starts the lobby; the host
+    /// no longer types one. Both Start Lobby and Join wait on network requests,
+    /// so their buttons show progress and lock until the request resolves.
     ///
     /// WaitingPanel:
     ///   - Host sees a "START GAME" button — calls LobbyManager.StartGame()
@@ -37,7 +41,6 @@ namespace SyncRush
 
         // ── Host panel ────────────────────────────────────────────────────────
         [Header("Host Panel")]
-        [SerializeField] private TMP_InputField _hostCodeInput;
         [SerializeField] private Button _startHostButton;
         [SerializeField] private Button _hostBackButton;
         [SerializeField] private TextMeshProUGUI _hostErrorText;
@@ -57,6 +60,11 @@ namespace SyncRush
         [SerializeField] private Button _startGameButton;   // host-only
         [SerializeField] private Button _leaveButton;
 
+        private TextMeshProUGUI _startHostLabel;
+        private TextMeshProUGUI _joinConfirmLabel;
+        private string _startHostIdleText;
+        private string _joinConfirmIdleText;
+
         // ── Unity ─────────────────────────────────────────────────────────────
 
         private void Awake()
@@ -67,14 +75,11 @@ namespace SyncRush
 
             // Host panel
             _startHostButton.onClick.AddListener(OnStartHostClicked);
-            _hostBackButton.onClick.AddListener(ShowMainPanel);
-            _hostCodeInput.onValueChanged.AddListener(val =>
-            {
-                string upper = val.ToUpper();
-                if (upper != val) _hostCodeInput.SetTextWithoutNotify(upper);
-                if (upper.Length > LobbyManager.CodeLength)
-                    _hostCodeInput.SetTextWithoutNotify(upper[..LobbyManager.CodeLength]);
-            });
+            _hostBackButton.onClick.AddListener(OnHostBackClicked);
+            _startHostLabel = _startHostButton.GetComponentInChildren<TextMeshProUGUI>();
+            _joinConfirmLabel = _joinConfirmButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (_startHostLabel != null) _startHostIdleText = _startHostLabel.text;
+            if (_joinConfirmLabel != null) _joinConfirmIdleText = _joinConfirmLabel.text;
 
             // Join panel
             _joinConfirmButton.onClick.AddListener(OnJoinClicked);
@@ -99,6 +104,7 @@ namespace SyncRush
             LobbyManager.Instance.OnHostStarted      += HandleHostStarted;
             LobbyManager.Instance.OnClientConnected  += HandleClientConnected;
             LobbyManager.Instance.OnConnectionFailed += HandleConnectionFailed;
+            LobbyManager.Instance.OnHostFailed       += HandleHostFailed;
             LobbyManager.Instance.OnPlayerJoined     += HandlePlayerJoined;
             LobbyManager.Instance.OnPlayerLeft       += HandlePlayerLeft;
             LobbyManager.Instance.OnSessionEnded     += HandleSessionEnded;
@@ -112,6 +118,7 @@ namespace SyncRush
             LobbyManager.Instance.OnHostStarted      -= HandleHostStarted;
             LobbyManager.Instance.OnClientConnected  -= HandleClientConnected;
             LobbyManager.Instance.OnConnectionFailed -= HandleConnectionFailed;
+            LobbyManager.Instance.OnHostFailed       -= HandleHostFailed;
             LobbyManager.Instance.OnPlayerJoined     -= HandlePlayerJoined;
             LobbyManager.Instance.OnPlayerLeft       -= HandlePlayerLeft;
             LobbyManager.Instance.OnSessionEnded     -= HandleSessionEnded;
@@ -127,14 +134,16 @@ namespace SyncRush
 
         private void OnStartHostClicked()
         {
-            string code = _hostCodeInput.text.Trim().ToUpper();
-            if (!LobbyManager.IsValidCode(code))
-            {
-                ShowHostError($"Code must be exactly {LobbyManager.CodeLength} letters or numbers.");
-                return;
-            }
             ClearHostError();
-            LobbyManager.Instance.StartHost(code);
+            SetHostBusy(true);
+            LobbyManager.Instance.StartHost();
+        }
+
+        private void OnHostBackClicked()
+        {
+            // Cancel a Start Lobby still waiting on Relay, same as Join's Back.
+            LobbyManager.Instance.CancelPendingConnection();
+            ShowMainPanel();
         }
 
         private void OnJoinClicked()
@@ -146,7 +155,7 @@ namespace SyncRush
                 return;
             }
             ClearJoinError();
-            _joinConfirmButton.interactable = false;
+            SetJoinBusy(true);
             LobbyManager.Instance.JoinAsClient(code);
         }
 
@@ -174,6 +183,7 @@ namespace SyncRush
 
         private void HandleHostStarted(string code)
         {
+            SetHostBusy(false);
             _waitingCodeDisplay.text = $"Your Code: <b>{code}</b>";
             _waitingStatusText.text  = "Waiting for players...";
             UpdatePlayerCount();
@@ -184,6 +194,7 @@ namespace SyncRush
 
         private void HandleClientConnected()
         {
+            SetJoinBusy(false);
             _waitingCodeDisplay.text = $"Code: <b>{LobbyManager.Instance.CurrentCode}</b>";
             _waitingStatusText.text  = "Waiting for host to start...";
             UpdatePlayerCount();
@@ -194,8 +205,14 @@ namespace SyncRush
 
         private void HandleConnectionFailed(string reason)
         {
-            _joinConfirmButton.interactable = true;
+            SetJoinBusy(false);
             ShowJoinError(reason);
+        }
+
+        private void HandleHostFailed(string reason)
+        {
+            SetHostBusy(false);
+            ShowHostError(reason);
         }
 
         private void HandlePlayerJoined(ulong clientId)
@@ -225,9 +242,9 @@ namespace SyncRush
         private void ShowMainPanel()
         {
             SetActivePanel(_mainPanel);
-            _hostCodeInput.text = string.Empty;
             _joinCodeInput.text = string.Empty;
-            _joinConfirmButton.interactable = true;
+            SetHostBusy(false);
+            SetJoinBusy(false);
             ClearHostError();
             ClearJoinError();
         }
@@ -249,7 +266,19 @@ namespace SyncRush
         private void UpdatePlayerCount()
         {
             int count = LobbyManager.Instance.PlayerCount;
-            _playerCountText.text = $"Players: {count} / 4";
+            _playerCountText.text = $"Players: {count} / {LobbyManager.MaxPlayers}";
+        }
+
+        private void SetHostBusy(bool busy)
+            => SetBusy(_startHostButton, _startHostLabel, busy ? "CREATING..." : _startHostIdleText, busy);
+
+        private void SetJoinBusy(bool busy)
+            => SetBusy(_joinConfirmButton, _joinConfirmLabel, busy ? "CONNECTING..." : _joinConfirmIdleText, busy);
+
+        private static void SetBusy(Button button, TextMeshProUGUI label, string text, bool busy)
+        {
+            button.interactable = !busy;
+            if (label != null && text != null) label.text = text;
         }
 
         private void ShowHostError(string msg)  => SetError(_hostErrorText, msg);

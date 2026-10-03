@@ -68,6 +68,12 @@ namespace SyncRush
         [Tooltip("How quickly a horizontal impulse (AddImpulse) decays back to zero. Higher = shorter-lived knockback.")]
         [SerializeField] private float _externalVelocityDamping = 4f;
 
+        // Hazard hit-stun (Knockback): no input and no airborne decay, so a hit actually throws the
+        // player clear. Without it the push faded in ~0.5 s and players could steer back to the
+        // platform, or a spinning bar caught up and re-hit them in the same direction ("carried").
+        private float _stunTimer;
+        private bool _knockbackAirborne; // knockback holds until landing, even after the stun ends
+
         [Header("Moving Platforms")]
         [Tooltip("A moving platform carries the player while its surface is within this many degrees of level. " +
                  "Steeper than this and the player is no longer carried and slides off instead.")]
@@ -86,6 +92,12 @@ namespace SyncRush
         private Transform _platformHitThisMove;
         private Vector3 _platformHitPoint;
         private Vector3 _platformHitNormal;
+
+        // CharacterController.isGrounded is true for any contact under the capsule, including the
+        // near-vertical side of a flipping RotationPlat, which let players jump off a wall. Footing
+        // additionally requires a surface within the controller's slope limit.
+        private bool _hasFooting;
+        private float _groundNormalYThisMove;
 
         // Interpolation — stores positions from the last two FixedUpdate ticks
         // so the camera can read a smoothly interpolated position every LateUpdate
@@ -213,7 +225,7 @@ namespace SyncRush
             if (gameObject.scene.name != LobbyManager.GameSceneName) return;
 
             float dt = Time.fixedDeltaTime;
-            bool grounded = _cc.isGrounded;
+            bool grounded = _hasFooting;
 
             // ── Coyote time ──────────────────────────────────────────────────
             if (grounded)
@@ -245,7 +257,9 @@ namespace SyncRush
             float currentSpeed = wantsSprint ? _sprintSpeed : _baseSpeed;
 
             // ── Horizontal movement ──────────────────────────────────────────
-            Vector2 rawInput = _inputReader.MoveInput * InputDirectionMultiplier;
+            _stunTimer -= dt;
+            bool stunned = _stunTimer > 0f;
+            Vector2 rawInput = stunned ? Vector2.zero : _inputReader.MoveInput * InputDirectionMultiplier;
             Vector3 wishDir = new Vector3(rawInput.x, 0f, rawInput.y);
             wishDir = transform.TransformDirection(wishDir);
 
@@ -287,7 +301,9 @@ namespace SyncRush
                 horizontal.z + _externalVelocity.z);
             motion += platformSlide;
             Vector3 step = motion * dt + platformCarry;
+            _groundNormalYThisMove = -1f;
             _cc.Move(step);
+            _hasFooting = _cc.isGrounded && HasWalkableGround();
             _currentPosition = transform.position;
             DebugLogUnexpectedMotion(positionBeforeMove, step, platformCarry, platformSlide);
 
@@ -295,7 +311,9 @@ namespace SyncRush
 
             // Knockback fades out over time rather than persisting forever or
             // being instantly overwritten by input like _velocity.x/z would be.
-            _externalVelocity = Vector3.Lerp(_externalVelocity, Vector3.zero, dt * _externalVelocityDamping);
+            if (_hasFooting && !stunned) _knockbackAirborne = false;
+            if (_hasFooting || (!stunned && !_knockbackAirborne))
+                _externalVelocity = Vector3.Lerp(_externalVelocity, Vector3.zero, dt * _externalVelocityDamping);
         }
 
         private void LateUpdate()
@@ -318,16 +336,32 @@ namespace SyncRush
         private void OnControllerColliderHit(ControllerColliderHit hit)
         {
             _lastHitName = hit.collider.name;
+            _groundNormalYThisMove = Mathf.Max(_groundNormalYThisMove, hit.normal.y);
 
             // Keep the most upward-facing contact this Move as the thing we're standing on.
             // Only moving (kinematic-body) surfaces count; static ramps are left to CharacterController.
+            // Spinners are hazards, not rides: carrying the player let a RotationX bar drag them around.
             var rb = hit.collider.attachedRigidbody;
             if (rb == null || !rb.isKinematic || hit.normal.y < 0.3f) return;
+            if (rb.GetComponentInChildren<SpinnerHazard>() != null) return;
             if (_platformHitThisMove != null && hit.normal.y <= _platformHitNormal.y) return;
 
             _platformHitThisMove = rb.transform;
             _platformHitPoint    = hit.point;
             _platformHitNormal   = hit.normal;
+        }
+
+        private bool HasWalkableGround()
+        {
+            float minNormalY = Mathf.Cos(_cc.slopeLimit * Mathf.Deg2Rad);
+            if (_groundNormalYThisMove >= minNormalY) return true;
+
+            // Standing on a ledge edge, the capsule's contact normal is angled even though the
+            // floor is flat. Check straight down for the real surface before denying footing.
+            Vector3 origin = transform.TransformPoint(_cc.center);
+            float reach = _cc.height * 0.5f + _cc.skinWidth + 0.1f;
+            return Physics.Raycast(origin, Vector3.down, out RaycastHit hit, reach, ~0, QueryTriggerInteraction.Ignore)
+                   && hit.normal.y >= minNormalY;
         }
 
         private void UpdatePlatformContact()
@@ -396,6 +430,21 @@ namespace SyncRush
             DebugLogImpulse("Launch", velocity, source);
             _externalVelocity = new Vector3(velocity.x, 0f, velocity.z);
             _velocity.y = Mathf.Max(_velocity.y, velocity.y);
+        }
+
+        /// <summary>
+        /// Hazard hit: Launch plus a hit-stun of <paramref name="stunTime"/> seconds with no movement
+        /// input, during which the knockback doesn't decay while airborne. Bounce pads use plain
+        /// Launch so players keep steering on them.
+        /// </summary>
+        public void Knockback(Vector3 velocity, float stunTime, Object source = null)
+        {
+            // Hazard triggers fire for every player replica in the scene; only the owner simulates.
+            if (!IsOwner) return;
+
+            Launch(velocity, source);
+            _stunTimer = Mathf.Max(_stunTimer, stunTime);
+            _knockbackAirborne = true;
         }
 
         /// <summary>Current stamina normalised 0–1 (for HUD display).</summary>

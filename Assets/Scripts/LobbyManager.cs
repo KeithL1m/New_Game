@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
+using Unity.Services.Relay;
+using Unity.Services.Relay.Models;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -10,11 +15,12 @@ namespace SyncRush
     /// <summary>
     /// Manages host/client session lifecycle for Sync Rush.
     ///
-    /// Join code design:
-    ///   - The HOST creates a 6-character alphanumeric code of their choice.
-    ///   - Clients enter that exact code to join.
-    ///   - Codes are normalised to uppercase before storage and comparison.
-    ///   - No auto-generation — the host owns the code.
+    /// Connection: Unity Relay (GDD §11 — test on real Relay from day one, never localhost).
+    ///   - Every player signs in to Unity Gaming Services anonymously on first Host/Join.
+    ///   - The HOST asks Relay for an allocation; Relay returns a 6-character join code.
+    ///   - Clients enter that code; Relay returns the server details to connect through.
+    ///   - Both sides then start NGO as before — only the transport setup changes.
+    ///   - Codes are normalised to uppercase before use.
     ///
     /// Scene flow:
     ///   LobbyScene  ──[Host starts game]──>  GameScene  (NGO NetworkSceneManager)
@@ -33,6 +39,10 @@ namespace SyncRush
 
         // ── Constants ─────────────────────────────────────────────────────────
         public const int CodeLength = 6;
+        public const int MaxPlayers = 4;
+
+        // DTLS: encrypted UDP, supported on every desktop platform. ("wss" would be needed for WebGL.)
+        private const string RelayConnectionType = "dtls";
         private const string ValidChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
         // NGO only invokes OnClientConnectedCallback on a non-host client for its
@@ -46,13 +56,21 @@ namespace SyncRush
         // ── State ─────────────────────────────────────────────────────────────
         public string CurrentCode { get; private set; } = string.Empty;
         public bool IsHost { get; private set; }
+
+        /// <summary>True while a Host/Join request is waiting on Unity Services or Relay.</summary>
+        public bool IsBusy { get; private set; }
+
+        // Bumped by every Host/Join/Cancel. An async request that finishes after the player
+        // cancelled (or started another) sees a stale ID and drops its result.
+        private int _attemptId;
         public List<ulong> ConnectedClientIds { get; private set; } = new();
         public int PlayerCount { get; private set; }
 
         // ── Events ────────────────────────────────────────────────────────────
         public event Action<string> OnHostStarted;          // code
         public event Action OnClientConnected;
-        public event Action<string> OnConnectionFailed;     // reason
+        public event Action<string> OnConnectionFailed;     // reason (join side)
+        public event Action<string> OnHostFailed;           // reason (host side)
         public event Action<ulong> OnPlayerJoined;          // clientId
         public event Action<ulong> OnPlayerLeft;            // clientId
         public event Action OnSessionEnded;
@@ -98,37 +116,58 @@ namespace SyncRush
             => code?.Trim().ToUpper() ?? string.Empty;
 
         /// <summary>
-        /// Start as host with the given code.
-        /// The code must pass IsValidCode before calling this.
+        /// Create a Relay allocation and start as host. Relay generates the join code,
+        /// reported through OnHostStarted; failures through OnHostFailed.
         /// </summary>
-        public void StartHost(string code)
+        public async void StartHost()
         {
-            ResetStaleSession();
+            if (IsBusy) return;
+            int attempt = BeginAttempt();
 
-            CurrentCode = NormaliseCode(code);
-            IsHost = true;
-
-            SubscribeToNetworkManager();
-            if (!NetworkManager.Singleton.StartHost())
+            try
             {
-                Debug.LogError("[LobbyManager] StartHost failed — NetworkManager refused to start (already listening?).");
-                UnsubscribeFromNetworkManager();
-                IsHost = false;
-                OnConnectionFailed?.Invoke("Failed to start host. Please try again.");
-                return;
-            }
-            RegisterPlayerCountMessageHandler();
+                await EnsureSignedInAsync();
+                Allocation allocation = await RelayService.Instance.CreateAllocationAsync(MaxPlayers - 1);
+                string code = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+                if (attempt != _attemptId) return; // cancelled while waiting; the unused allocation just expires
 
-            OnHostStarted?.Invoke(CurrentCode);
-            Debug.Log($"[LobbyManager] Host started with code: {CurrentCode}");
+                Transport.SetRelayServerData(allocation.ToRelayServerData(RelayConnectionType));
+                CurrentCode = NormaliseCode(code);
+                IsHost = true;
+
+                SubscribeToNetworkManager();
+                if (!NetworkManager.Singleton.StartHost())
+                {
+                    Debug.LogError("[LobbyManager] StartHost failed — NetworkManager refused to start (already listening?).");
+                    UnsubscribeFromNetworkManager();
+                    IsHost = false;
+                    OnHostFailed?.Invoke("Failed to start host. Please try again.");
+                    return;
+                }
+                RegisterPlayerCountMessageHandler();
+
+                OnHostStarted?.Invoke(CurrentCode);
+                Debug.Log($"[LobbyManager] Host started with Relay code: {CurrentCode}");
+            }
+            catch (Exception e)
+            {
+                if (attempt != _attemptId) return;
+                Debug.LogException(e);
+                IsHost = false;
+                OnHostFailed?.Invoke(DescribeServiceError(e, joining: false));
+            }
+            finally
+            {
+                EndAttempt(attempt);
+            }
         }
 
         /// <summary>
-        /// Attempt to join a session using the given code.
-        /// For LAN this connects directly; Relay wrapping comes in Pre-Work.
+        /// Look up a Relay join code and connect to that host.
         /// </summary>
-        public void JoinAsClient(string code)
+        public async void JoinAsClient(string code)
         {
+            if (IsBusy) return;
             string normalised = NormaliseCode(code);
 
             if (!IsValidCode(normalised))
@@ -137,22 +176,39 @@ namespace SyncRush
                 return;
             }
 
-            ResetStaleSession();
-
-            CurrentCode = normalised;
-            IsHost = false;
-
-            SubscribeToNetworkManager();
-            if (!NetworkManager.Singleton.StartClient())
+            int attempt = BeginAttempt();
+            try
             {
-                Debug.LogError("[LobbyManager] StartClient failed — NetworkManager refused to start (already listening?).");
-                UnsubscribeFromNetworkManager();
-                OnConnectionFailed?.Invoke("Failed to connect. Please try again.");
-                return;
-            }
-            RegisterPlayerCountMessageHandler();
+                await EnsureSignedInAsync();
+                JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(normalised);
+                if (attempt != _attemptId) return;
 
-            Debug.Log($"[LobbyManager] Joining with code: {CurrentCode}");
+                Transport.SetRelayServerData(allocation.ToRelayServerData(RelayConnectionType));
+                CurrentCode = normalised;
+                IsHost = false;
+
+                SubscribeToNetworkManager();
+                if (!NetworkManager.Singleton.StartClient())
+                {
+                    Debug.LogError("[LobbyManager] StartClient failed — NetworkManager refused to start (already listening?).");
+                    UnsubscribeFromNetworkManager();
+                    OnConnectionFailed?.Invoke("Failed to connect. Please try again.");
+                    return;
+                }
+                RegisterPlayerCountMessageHandler();
+
+                Debug.Log($"[LobbyManager] Joining with Relay code: {CurrentCode}");
+            }
+            catch (Exception e)
+            {
+                if (attempt != _attemptId) return;
+                Debug.LogException(e);
+                OnConnectionFailed?.Invoke(DescribeServiceError(e, joining: true));
+            }
+            finally
+            {
+                EndAttempt(attempt);
+            }
         }
 
         /// <summary>
@@ -162,6 +218,8 @@ namespace SyncRush
         /// </summary>
         public void CancelPendingConnection()
         {
+            _attemptId++;
+            IsBusy = false;
             ResetStaleSession();
             CurrentCode = string.Empty;
             IsHost = false;
@@ -210,6 +268,8 @@ namespace SyncRush
         /// </summary>
         public void Disconnect()
         {
+            _attemptId++;
+            IsBusy = false;
             if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
                 NetworkManager.Singleton.Shutdown();
 
@@ -222,6 +282,88 @@ namespace SyncRush
             SceneManager.LoadScene(LobbySceneName);
 
             Debug.Log("[LobbyManager] Disconnected.");
+        }
+
+        // ── Relay / Unity Services ────────────────────────────────────────────
+
+        private static UnityTransport Transport =>
+            (UnityTransport)NetworkManager.Singleton.NetworkConfig.NetworkTransport;
+
+        private int BeginAttempt()
+        {
+            ResetStaleSession();
+            IsBusy = true;
+            return ++_attemptId;
+        }
+
+        private void EndAttempt(int attempt)
+        {
+            if (attempt == _attemptId) IsBusy = false;
+        }
+
+        /// <summary>
+        /// Initialises Unity Services and signs in anonymously, once per run. Relay rejects
+        /// unauthenticated requests.
+        /// </summary>
+        private static async Task EnsureSignedInAsync()
+        {
+            if (UnityServices.State == ServicesInitializationState.Uninitialized)
+            {
+                var options = new InitializationOptions();
+                options.SetProfile(AuthProfileName());
+                await UnityServices.InitializeAsync(options);
+            }
+            else
+            {
+                while (UnityServices.State == ServicesInitializationState.Initializing)
+                    await Task.Yield();
+            }
+
+            if (!AuthenticationService.Instance.IsSignedIn)
+                await AuthenticationService.Instance.SignInAnonymouslyAsync();
+        }
+
+        /// <summary>
+        /// Anonymous sign-in is cached per profile, and every Editor instance on a machine
+        /// shares one PlayerPrefs store. Without separate profiles, a Multiplayer Play Mode
+        /// virtual player signs in as the same player as the main Editor. Virtual players run
+        /// from Library/VP/[id], so key the profile off that folder.
+        /// </summary>
+        private static string AuthProfileName()
+        {
+            const string vpMarker = "/Library/VP/";
+            string dataPath = Application.dataPath.Replace('\\', '/');
+            int i = dataPath.IndexOf(vpMarker, StringComparison.OrdinalIgnoreCase);
+            if (i < 0) return "main";
+
+            string id = dataPath.Substring(i + vpMarker.Length).Split('/')[0];
+            var profile = new System.Text.StringBuilder("vp_");
+            foreach (char c in id)
+                if (char.IsLetterOrDigit(c) && profile.Length < 30) // profiles: alphanumeric/-/_, max 30
+                    profile.Append(c);
+            return profile.ToString();
+        }
+
+        private static string DescribeServiceError(Exception e, bool joining)
+        {
+            if (e is RelayServiceException relay)
+            {
+                switch (relay.Reason)
+                {
+                    case RelayExceptionReason.JoinCodeNotFound:
+                    case RelayExceptionReason.EntityNotFound:
+                    case RelayExceptionReason.InvalidRequest when joining:
+                        return "No session found for that code.";
+                    case RelayExceptionReason.InactiveProject:
+                    case RelayExceptionReason.Forbidden:
+                        return "Relay isn't enabled for this project (Unity Cloud dashboard).";
+                    default:
+                        return $"Relay error: {relay.Message}";
+                }
+            }
+            if (e is RequestFailedException) // includes AuthenticationException
+                return $"Couldn't reach Unity services: {e.Message}";
+            return "Something went wrong connecting. Please try again.";
         }
 
         // ── NetworkManager event wiring ───────────────────────────────────────
