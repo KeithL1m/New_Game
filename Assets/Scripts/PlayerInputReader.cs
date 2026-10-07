@@ -33,6 +33,7 @@ namespace SyncRush
         public event Action OnInteractPressed;
         public event Action OnAttackPressed;
         public event Action OnTetherPressed;
+        public event Action OnTetherReleased;
         public event Action OnFireDartPressed;
 
         // ── Internal ──────────────────────────────────────────────────────────
@@ -78,12 +79,21 @@ namespace SyncRush
             if (ctx.performed) OnInteractPressed?.Invoke();
         }
 
+        // Attack action is reused as Tether (hold to anchor, release to slingshot)
+        // until a dedicated binding is added.
         public void OnAttack(InputAction.CallbackContext ctx)
         {
-            if (ctx.performed) OnAttackPressed?.Invoke();
+            if (ctx.performed)
+            {
+                OnAttackPressed?.Invoke();
+                OnTetherPressed?.Invoke();
+            }
+            else if (ctx.canceled)
+            {
+                OnTetherReleased?.Invoke();
+            }
         }
 
-        // Attack action is reused as Tether until a dedicated binding is added
         // These stubs satisfy the interface for actions not yet wired to gameplay
         public void OnPrevious(InputAction.CallbackContext ctx) { }
         public void OnNext(InputAction.CallbackContext ctx) { }

@@ -124,6 +124,9 @@ namespace SyncRush
         /// <summary>Multiplier applied to gravity (Heavy dart sets to 2.5).</summary>
         [HideInInspector] public float GravityMultiplier = 1f;
 
+        /// <summary>Blocks move and jump input (gravity and knockback still apply). Set by a tether anchor while holding.</summary>
+        [HideInInspector] public bool InputLocked;
+
         // ── Public accessor for InputReader (used by PlayerCameraController) ──
         public PlayerInputReader InputReader => _inputReader;
 
@@ -240,7 +243,7 @@ namespace SyncRush
 
             // ── Jump ─────────────────────────────────────────────────────────
             _jumpBufferTimer -= dt;
-            if (_jumpBufferTimer > 0f && _coyoteTimer > 0f)
+            if (_jumpBufferTimer > 0f && _coyoteTimer > 0f && !InputLocked)
             {
                 _velocity.y = JumpSpeed;
                 _coyoteTimer = 0f;
@@ -259,7 +262,7 @@ namespace SyncRush
             // ── Horizontal movement ──────────────────────────────────────────
             _stunTimer -= dt;
             bool stunned = _stunTimer > 0f;
-            Vector2 rawInput = stunned ? Vector2.zero : _inputReader.MoveInput * InputDirectionMultiplier;
+            Vector2 rawInput = stunned || InputLocked ? Vector2.zero : _inputReader.MoveInput * InputDirectionMultiplier;
             Vector3 wishDir = new Vector3(rawInput.x, 0f, rawInput.y);
             wishDir = transform.TransformDirection(wishDir);
 
