@@ -3,16 +3,15 @@
 Tracks implementation status against [GDD.md](GDD.md). Update this file whenever a
 GDD system is added, changed, or a milestone gate is crossed — don't let it drift.
 
-Last verified against repo: **2026-09-23**, on top of commit `8b23a84` plus uncommitted work (obstacle scripts/prefabs
-moved out of `Assets/ObstacleCoursePack/`, player/camera/hazard changes below). Checked against the files, not by
-a fresh gameplay pass — the 2026-09-23 changes are compile-clean but not yet confirmed in Play Mode.
+Last verified against repo: **2026-10-07**, at commit `576fa1f` (clean working tree). Checked against the files, not by
+a fresh gameplay pass. The Editor reports no compile errors.
 
 ---
 ## Milestone status (GDD §9)
 
 | # | Deliverable | Status | Notes |
 |---|---|---|---|
-| **M0** | Race state machine, checkpoints, placement, greybox straight course | 🟨 In progress | Greybox straight course built by hand in ProBuilder (`GameScene`: `Platform`, `Starting`/`Checkpoint`/`Finish` pole gates, `Deathzone`). `RaceStateMachine`, `RaceCheckpoint`, `PlayerRaceProgress`, `DeathZone`, `SpawnPointRegistry` written and wired onto those objects. **2026-09-04:** first real two-client test (host + Multiplayer Play Mode virtual player) — host/join/countdown/GO all fired correctly and remote player movement replicated well on both sides. Checkpoint crossing, respawn, and finish/placement reporting not yet specifically exercised in this pass |
+| **M0** | Race state machine, checkpoints, placement, greybox straight course | 🟨 In progress | Greybox straight course built by hand in ProBuilder (`GameScene`: `Platform`, `Starting`/`Checkpoint`/`Finish` pole gates, `Deathzone`). `RaceStateMachine`, `RaceCheckpoint`, `PlayerRaceProgress`, `DeathZone`, `SpawnPointRegistry` written and wired onto those objects. **2026-09-04:** first real two-client test (host + Multiplayer Play Mode virtual player) — host/join/countdown/GO all fired correctly and remote player movement replicated well on both sides. Since then, every M0 system has been verified with host + MPPM on one machine. The only M0 item left is the two-machine Relay test, deferred 2026-10-07 because no second machine is available |
 | **M1** | Tether + ragdoll-on-impact, 4 players over Relay | ⬜ Not started | No tether or ragdoll scripts yet |
 | **M2** | Darts, status effects, ammo economy | ⬜ Not started | |
 | **M3** | Course generator, 15 chunks | ⬜ Not started | |
@@ -23,7 +22,7 @@ a fresh gameplay pass — the 2026-09-23 changes are compile-clean but not yet c
 
 | Piece | Status | Where |
 |---|---|---|
-| Join-by-code host/client session (`ConnectionManager` equivalent) | 🟨 Implemented, direct-connect only | `Assets/Scripts/LobbyManager.cs` — 6-char host-chosen code, `PlayerCount` synced via named message. Despite earlier notes here, the code (and its own doc comment) confirms this is still a direct `UnityTransport` connection (`127.0.0.1:7777` in `LobbyScene`'s `NetworkManager`) — actual Unity Relay wrapping is **not implemented yet** ("Relay wrapping comes in Pre-Work"). Matters for the GDD §11 risk register item "test on real Relay from day one, never on localhost" — that risk is not yet being exercised |
+| Join-by-code host/client session (`ConnectionManager` equivalent) | 🟨 Implemented over Unity Relay (`576fa1f`), not yet tested across two machines | `Assets/Scripts/LobbyManager.cs` — anonymous UGS sign-in, host creates a Relay allocation (`MaxPlayers - 1` = 3 slots, `dtls`), and Relay generates the 6-char join code (the host no longer types one; `LobbyUI`'s host code input was removed). Clients join via `JoinAllocationAsync`. Async Host/Join show `CREATING...`/`CONNECTING...` and can be cancelled (Back) through an attempt-ID guard. Each MPPM virtual player gets its own auth profile (`vp_<id>`) so it doesn't sign in as the main Editor. Relay errors are mapped to user-facing messages (bad code, Relay not enabled on the dashboard, services unreachable). `PlayerCount` is still synced via named message. Requires Relay enabled for the project in the Unity Cloud dashboard |
 | Lobby ↔ Game scene split | ✅ Implemented | `Assets/Scenes/LobbyScene.unity`, `Assets/Scenes/GameScene.unity` (commit `ab0fc98`) |
 | Lobby UI | ✅ Implemented | `Assets/Scripts/LobbyUI.cs` (+ `Assets/Editor/RebuildLobbyUI.cs`) |
 | Owner-simulated movement (`CharacterController`) | ✅ Implemented, GDD values wired in Inspector | `Assets/Scripts/SyncRushPlayerController.cs` — base 7 m/s, sprint 10 m/s, air control 0.4, jump 1.8 m, coyote 0.12 s, stamina drain/recover |
@@ -36,9 +35,9 @@ a fresh gameplay pass — the 2026-09-23 changes are compile-clean but not yet c
 
 | System | Status | Where |
 |---|---|---|
-| `RaceStateMachine` | 🟨 Implemented, untested | `Assets/Scripts/RaceStateMachine.cs` — server-authoritative `WaitingToStart → Countdown → Racing → Results`. `FinalStretch` deliberately omitted until M1's tether exists to sever (GDD §5.6) |
+| `RaceStateMachine` | ✅ Verified on one machine, host + MPPM (user-reported, by 2026-10-07) | Full `Racing → Results` run with every player finishing reported working. | `Assets/Scripts/RaceStateMachine.cs` — server-authoritative `WaitingToStart → Countdown → Racing → Results`. `FinalStretch` deliberately omitted until M1's tether exists to sever (GDD §5.6) |
 | `RaceCheckpoint` | ✅ Verified, host + MPPM virtual client (2026-09-23) | `Assets/Scripts/RaceCheckpoint.cs` — trigger gate with `Kind`/`Order`; gates in `GameScene` run `Starting`(0) → `Checkpoint`(1) → `Checkpoint2`(2) → `Finish`(3). `Checkpoint3`–`Checkpoint6` were removed in `8b23a84` (duplicates); `Finish` was left at order 7, so finishing was silently rejected by the anti-shortcut check until it was renumbered to 3 on 2026-10-02. Crossing in order confirmed normal. **Not tried over a real remote connection** (Multiplayer Play Mode's virtual client is same-machine, no real network latency) |
-| `PlayerRaceProgress` | 🟨 Implemented, anti-shortcut not exercised | `Assets/Scripts/PlayerRaceProgress.cs`, added to `PlayerPrefab` — owner-writable checkpoint order (anti-shortcut: rejects out-of-sequence crossings), spawn/respawn placement, reports finish to `RaceStateMachine` via ServerRpc. No shortcut attempted in play so far (none encountered, not deliberately tested), so the rejection path itself is still unconfirmed |
+| `PlayerRaceProgress` | ✅ Verified on one machine, host + MPPM (user-reported, by 2026-10-07) | `Assets/Scripts/PlayerRaceProgress.cs`, added to `PlayerPrefab` — owner-writable checkpoint order (anti-shortcut: rejects out-of-sequence crossings), spawn/respawn placement, reports finish to `RaceStateMachine` via ServerRpc. The user reports the out-of-order rejection working when tested deliberately |
 | `DeathZone` | ✅ Verified single-player and non-host client via MPPM (2026-09-23) | `Assets/Scripts/DeathZone.cs`, attached to `Deathzone` (now a trigger) — respawns the player at their last checkpoint. Confirmed for the non-host client using the Multiplayer Play Mode virtual client. **Not confirmed over an actual remote/online connection** — MPPM's virtual client shares the host's machine, so real latency/replication timing hasn't been exercised |
 | `SpawnPointRegistry` | 🟨 Implemented, untested | `Assets/Scripts/SpawnPointRegistry.cs`, attached to `SpawnPoints` in `GameScene`; reads its own children (`Spawn_0`–`Spawn_3`) as spawn points, assigned per client by `OwnerClientId % count` |
 
@@ -49,9 +48,9 @@ a fresh gameplay pass — the 2026-09-23 changes are compile-clean but not yet c
 **Testing gotcha (2026-09-04):** editing a prefab from outside the Editor (e.g. a direct file edit) while a Multiplayer Play Mode virtual player is already running can leave that VP instance's `AssetDatabase` with a stale/null import for the changed asset, even though the file on disk is correct — it showed up as a spurious `[Netcode] NetworkConfig mismatch` on connect. Fix was to touch/resave the file so the VP instance's file watcher picked up the change and reimported it. If this recurs, restart the Multiplayer Play Mode virtual player rather than debugging the network code.
 
 **Next up (2026-09-23):** checkpoint crossing in order and respawn-to-last-checkpoint both confirmed for the non-host client via Multiplayer Play Mode's virtual client. Still open:
-- **Anti-shortcut rejection** — not deliberately tried yet (no shortcut attempted, so the rejection path is unexercised, not passing-by-observation).
-- ~~**Finish/placement reporting**~~ — **verified 2026-10-02** (host + MPPM virtual client): after renumbering `Finish` to order 3, the host logged `Client 1 finished in place 1.` The `Racing → Results` transition (fires once *all* connected players finish) is still untested — needs the host to finish too.
-- **Real remote play** — everything so far is host + MPPM virtual client on one machine, which has no real network latency and shares the same `Application.dataPath`/asset state as the host (see the 2026-09-04 testing gotcha above). None of this has been exercised over an actual remote connection (e.g. two machines over Relay, or even two machines on direct connect) — that's the remaining gap before calling M0's kill gate closed. Also worth deciding when to implement real Relay (currently direct-connect only, see Foundation table above) — either before or as part of that pass.
+- ~~**Anti-shortcut rejection**~~ — **verified** (user-reported, last session before 2026-10-07).
+- ~~**Finish/placement reporting**~~ — **verified 2026-10-02** (host + MPPM virtual client): after renumbering `Finish` to order 3, the host logged `Client 1 finished in place 1.` ~~`Racing → Results` once every player finishes~~ — **verified** (user-reported, last session before 2026-10-07).
+- **Real remote play — ⏸ DEFERRED (2026-10-07):** no second machine available for now. M0 work continues without it, but M0 isn't closed until this passes. If the open items here keep piling up, prioritise this test. everything so far is host + MPPM virtual client on one machine, which has no real network latency and shares the same `Application.dataPath`/asset state as the host (see the 2026-09-04 testing gotcha above). None of this has been exercised over an actual remote connection (e.g. two machines over Relay, or even two machines on direct connect) — that's the remaining gap before calling M0's kill gate closed. Relay is now implemented (`576fa1f`, see the Foundation table above), so the next step is a two-machine Relay session that runs the full race: checkpoints, respawn, hazards and finish.
 
 **Course expanded (2026-09-16):** the greybox course now has obstacle variety past the `RotationPlat` gauntlet instead of running straight into `Finish`. `Start`, `Platform`, `Platform (1)`/Pendulums, `Checkpoint`/`Platform (3)`, and the gauntlet itself are unchanged. `Platform (2)` is disabled (`MeshRenderer`/`MeshCollider` `enabled=false` — not deleted, reversible) since discrete tiles now serve as the floor instead. Sequence from the gauntlet exit (x≈-154.85), all tiles sized to match `RotationPlat`'s own proportions (12×0.25×5) with its ~2.2m gap convention:
 
@@ -96,6 +95,17 @@ All confirmed in single-player playtesting per the user (2026-09-23). **Not yet 
 
 **Housekeeping**
 - Obstacle scripts/prefabs moved out of `Assets/ObstacleCoursePack/` and are **uncommitted** — commit the new `.meta` files too or script references will break.
+
+## Relay + hazard physics pass (2026-10-02, commit `576fa1f`)
+
+Read from the code. Nothing here is recorded as playtested, except the Finish renumber, which has its own entry above.
+
+- **Unity Relay**, replacing the direct connection (see the Foundation table).
+- **Hit-stun knockback.** `SyncRushPlayerController.Knockback(velocity, stunTime)`: no movement input during the stun, and knockback doesn't decay while airborne until the player lands. `PendulumHazard` and `SpinnerHazard` use it (0.6 s stun). Bounce pads keep plain `Launch`, so players can still steer. It overwrites rather than adds, so a hit registered by two colliders no longer counts double. Owner-only.
+- **`SpinnerHazard`**: changed from `OnTriggerEnter` to `OnTriggerStay`, so a player still inside the hit zone gets hit again once the lockout ends. Knockback is now at least 1.3× the bar's tip speed (`_outrunFactor`), so the bar can't catch up and "carry" the player. Spinners are also excluded from moving-platform carry.
+- **Footing.** Grounded now requires a contact surface within the `CharacterController` slope limit, or a downward raycast at a ledge edge. Before this, players could jump off the near-vertical side of a flipping `RotationPlat`.
+- **`RaceResultsPopup`**, a TEMP OnGUI debug popup on `RaceManager` that shows placements when the race reaches `Results`. `RaceStateMachine` gained `FinishCount`/`GetFinisher(i)` for it. To be replaced in M4.
+- `Finish` renumbered 7 → 3.
 
 ## Remaining core systems (GDD §7.2) — not started
 
