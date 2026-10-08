@@ -255,6 +255,7 @@ public class RebuildLobbyUI
         var waitingPanel = MakePanel("WaitingPanel", canvasGO.transform, bg, false);
         MakeTMP("WaitingTitle",   waitingPanel.transform, "LOBBY",                  48, white,                    new Vector2(0, 200), new Vector2(400, 70));
         var codeDisplay     = MakeTMP("CodeDisplay",    waitingPanel.transform, "Your Code: ------", 34, white,   new Vector2(0, 120), new Vector2(700, 55));
+        var copyCodeBtn     = MakeButton("CopyCodeButton", waitingPanel.transform, "COPY",        new Vector2(270, 120), new Vector2(130, 50), grey);
         var statusText      = MakeTMP("StatusText",     waitingPanel.transform, "Waiting for players...", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 55), new Vector2(700, 40));
         var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 0),   new Vector2(400, 50));
         var startGameBtn    = MakeButton("StartGameButton", waitingPanel.transform, "START GAME",  new Vector2(0, -80),  new Vector2(320, 70), new Color(0.1f, 0.7f, 0.3f));
@@ -282,6 +283,7 @@ public class RebuildLobbyUI
         so.FindProperty("_joinErrorText").objectReferenceValue     = joinErrorText;
 
         so.FindProperty("_waitingCodeDisplay").objectReferenceValue = codeDisplay;
+        so.FindProperty("_copyCodeButton").objectReferenceValue     = copyCodeBtn;
         so.FindProperty("_waitingStatusText").objectReferenceValue  = statusText;
         so.FindProperty("_playerCountText").objectReferenceValue    = playerCountText;
         so.FindProperty("_startGameButton").objectReferenceValue    = startGameBtn;

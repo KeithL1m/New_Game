@@ -3,8 +3,40 @@
 Tracks implementation status against [GDD.md](GDD.md). Update this file whenever a
 GDD system is added, changed, or a milestone gate is crossed — don't let it drift.
 
-Last verified against repo: **2026-10-07**, at commit `576fa1f` (clean working tree). Checked against the files, not by
-a fresh gameplay pass. The Editor reports no compile errors.
+Last verified against repo: **2026-10-07** (end of session), on top of pushed commit `f10d97d` plus the uncommitted
+work listed below. The Editor reports no compile errors.
+
+---
+## ▶ Start here next session (written 2026-10-07)
+
+**1. Uncommitted work: test it, then commit.** Everything after `f10d97d` is uncommitted
+(`PlayerTether.cs`, `PlayerPrefab.prefab`, `LobbyUI.cs`, `RebuildLobbyUI.cs`, `LobbyScene.unity`, this file):
+
+| Change | Tested? |
+|---|---|
+| Lobby COPY button + fix for being stuck on the Create Lobby panel | ✅ Play Mode and user |
+| Aim targeting (pick the player nearest screen centre, 25° cone) | ⬜ Needs 3+ players: add 2 MPPM virtual players |
+| Range preview line + distance marker (green in range, amber out of range) | 🟨 Seen working; amber colour change not yet seen |
+| HUD labels renamed "Tether" → "Slingshot" | 🟨 Seen in a screenshot (`SLINGSHOT READY`) |
+| Rope visuals: sag that straightens with tension, shake past 36 m, thicker rope | ⬜ Hold LMB within 36 m of another player to see it |
+
+Expect a large `LobbyScene.unity` diff: the UI builder regenerates the whole canvas.
+Restart any running MPPM virtual player before testing, because the prefab file was edited directly.
+
+**2. Pick the next feature** (open question, the user hasn't chosen yet):
+- **Tow**, the second rope move (recommended): the player in front pulls a trailing partner along with part of the leader's speed. It does more for the M1 question "is the tether fun?".
+- **Rope physics**: a simulated, visual-only rope (verlet points) that swings, whips on launch, and lies on the ground. The current rope is a fixed curve driven by tension, not physics. Polish, which could also wait for M4.
+
+**3. Decision blocking ragdoll + Pull (Recover):** which character to ragdoll, a placeholder made from primitives or
+a real rigged humanoid to keep (e.g. Mixamo, or Coplay auto-rig). The GDD wants one skeleton for both animation and ragdoll.
+
+**4. Still deferred:**
+- **Two-machine Relay test** (no second machine yet). It's also needed for the M1 kill gate: playtest the tether with a real friend.
+- **Parked soft-leash idea:** an always-on partner rope that slows a player who strays too far. Revisit if playtests show players ignoring their partner (see "Design note, tether vs leash" below).
+
+**Known quirks:** a one-off Multiplayer Tools `Ngo1Adapter` error can leave `NetworkManager` disabled. Restart Play Mode
+if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is still on in `SyncRushPlayerController`
+(`_debugLogPushes`). Remove it once the pushing issues are confirmed gone.
 
 ---
 ## Milestone status (GDD §9)
@@ -100,11 +132,13 @@ All confirmed in single-player playtesting per the user (2026-09-23). **Not yet 
 
 | System | Status | Where |
 |---|---|---|
-| `TetherSystem`, slingshot slice | ✅ Works on one machine, host and client each anchoring (user playtest 2026-10-07, host + MPPM); not yet fun-tested with a friend (M1 kill gate) or over real Relay | `Assets/Scripts/PlayerTether.cs`, on `PlayerPrefab`. Hold Attack (LMB) to anchor to the nearest player within 36 m (tripled from the GDD's 12 m on 2026-10-07 after playtest: 12 m needed players nearly touching at this game's scale), release to fire. While anchored, the anchor's move and jump input are locked (`SyncRushPlayerController.InputLocked`). Tension moves toward `distance / 36 m` at 1/1.2 s. On release the partner launches toward the anchor at `lerp(12, 40, tension)` m/s plus 14 m/s lift (raised 2026-10-07 from the GDD's 6–22 + 5 after the user found the launch barely noticeable: the player is 5 m tall, 2.5× human scale. Lift then went 10 → 14 so the partner overshoots the anchor, ~56 m flight from a full 36 m stretch, instead of landing on them: the slingshot should gain ground, not just reel the partner in). **User playtest 2026-10-07: this tuning feels right, like a proper slingshot rather than a pull.** For 1 s after launch the partner ignores collisions with the anchor's colliders (`_passThroughTime`), because the launch aims straight at the anchor and was stopping dead against them. The launch goes through `Knockback` with no stun, so they keep steering and the launch holds until landing. The anchor owns the state (`NetworkVariable`s) and sends the launch to the partner's owner as `[Rpc(SendTo.Owner)]`. The rope is a greybox `LineRenderer` (`Assets/Materials/TetherRope.mat`) that tints white→red with tension and thickens past 36 m. A TEMP OnGUI HUD at bottom centre (owner only) shows tension % while anchoring, otherwise a cooldown bar for each partner still cooling down, or `TETHER READY`. It's meant to be replaced in M4. **Deviations:** the 6 s cooldown is tracked per anchor→partner direction (so B can still anchor A straight after A fires B); releasing under 0.1 tension cancels with no launch or cooldown; targeting is nearest-player, not aim (GDD §5.4, planned for the rope pass). |
+| `TetherSystem`, slingshot slice | ✅ Works on one machine, host and client each anchoring (user playtest 2026-10-07, host + MPPM); not yet fun-tested with a friend (M1 kill gate) or over real Relay | `Assets/Scripts/PlayerTether.cs`, on `PlayerPrefab`. Hold Attack (LMB) to anchor to a player within 36 m. **Aim targeting (2026-10-07, untested):** picks the player closest to screen centre within 25° (`_aimAngle`), else the nearest in range, and a green `▼ TETHER` marker above their head shows who a press would pick (owner-only OnGUI). **Range preview (2026-10-07, untested):** added after the user found it hard to judge tether range without a rope. While idle, the owner sees a thin line to the aimed player and their distance on the marker: green `▼ SLINGSHOT 24m` in range, amber `▼ 52m / 36m` out to 2× range (was grey, which vanished against the light grey floor; preview width 0.08→0.15, 85% opacity) (`_previewRangeFactor`). **Naming (2026-10-07):** on-screen text says "Slingshot" (the move) instead of "Tether", which the user found confusing. Planned player-facing names: Rope (the system), Slingshot, Tow, Pull (for Recover). Code and GDD keep "Tether" (`PlayerTether`, `TetherState`) (tripled from the GDD's 12 m on 2026-10-07 after playtest: 12 m needed players nearly touching at this game's scale), release to fire. While anchored, the anchor's move and jump input are locked (`SyncRushPlayerController.InputLocked`). Tension moves toward `distance / 36 m` at 1/1.2 s. On release the partner launches toward the anchor at `lerp(12, 40, tension)` m/s plus 14 m/s lift (raised 2026-10-07 from the GDD's 6–22 + 5 after the user found the launch barely noticeable: the player is 5 m tall, 2.5× human scale. Lift then went 10 → 14 so the partner overshoots the anchor, ~56 m flight from a full 36 m stretch, instead of landing on them: the slingshot should gain ground, not just reel the partner in). **User playtest 2026-10-07: this tuning feels right, like a proper slingshot rather than a pull.** For 1 s after launch the partner ignores collisions with the anchor's colliders (`_passThroughTime`), because the launch aims straight at the anchor and was stopping dead against them. The launch goes through `Knockback` with no stun, so they keep steering and the launch holds until landing. The anchor owns the state (`NetworkVariable`s) and sends the launch to the partner's owner as `[Rpc(SendTo.Owner)]`. The rope is a `LineRenderer` (`Assets/Materials/TetherRope.mat`) that tints white→red with tension. **Rope visuals pass (2026-10-07, untested):** it's drawn as a 24-point curve that droops up to 4 m at the middle with no tension (`_maxSag`) and straightens as tension builds. Past 36 m it thickens and shakes sideways (`_strainShake` 0.35 m). Widths went up for the 5 m-tall player: rope 0.08→0.2, strained 0.18→0.35, preview 0.05→0.15. The curve is computed locally on each peer from the replicated tension, with no extra network traffic. The preview line stays straight and thin so it never reads as a real rope. A TEMP OnGUI HUD at bottom centre (owner only) shows tension % while anchoring, otherwise a cooldown bar for each partner still cooling down, or `SLINGSHOT READY`. It's meant to be replaced in M4. **Deviations:** the 6 s cooldown is tracked per anchor→partner direction (so B can still anchor A straight after A fires B); releasing under 0.1 tension cancels with no launch or cooldown; with no teams yet, the nearest-player fallback stands in for GDD §5.4's "partner by default". |
 
 **Design note, tether vs leash (2026-10-07, parked):** the user asked whether the rope should just keep partners together, as a leash. Decision: keep the GDD §5.3 action tether (Slingshot now, Tow/Recover later), not a physics leash. A hard leash mostly punishes, it's the GDD's top netcode risk (rubber-banding across two owners), and it undercuts the final-stretch betrayal. Open gap: with an optional tether, the pitch's "cooperation is mechanically enforced" is weak, since a strong player can ignore their partner. **Parked idea, not built:** an always-on partner rope (the GDD's `Idle` state) with a soft leash. When it's stretched past max length, the player out in front slows (e.g. −20% past 36 m). Each player only slows themselves, so it stays netcode-safe with no yank. Revisit if playtests show players ignoring their partner or the rope feeling optional, or once teams exist (2v2).
 
 **Deathzone expanded (2026-10-07):** the trigger was a 1 m slab ending ~30–40 m past the course, and big launches carried players past its edge. Only the `BoxCollider` changed: local size `(4, 40, 8)`, center `(0, -19.5, 0)`, so world bounds are now x -1054..866, z ±624, y -19..21.2. The top surface and visible slab are unchanged.
+
+**Lobby: COPY button + stuck-on-Create-Lobby fix (2026-10-07, verified in Play Mode and confirmed by the user):** the waiting panel has a COPY button that puts the code on the clipboard (`LobbyUI`, built by `RebuildLobbyUI`). Rebuilding the canvas changed the scene's object order and exposed a latent bug: `LobbyUI` subscribed to `LobbyManager` events only in `OnEnable`, and skipped that if `LobbyManager.Instance` wasn't set yet. Start Lobby then succeeded but the UI never left the Host panel. It now also subscribes in `Start`, which runs after every `Awake`. One-off seen while testing: a `NullReferenceException` in Multiplayer Tools' `Ngo1Adapter` during `NetworkManager.Awake` left the `NetworkManager` disabled for that run, so the host failed with "Something went wrong connecting". It didn't happen on restart. If it recurs, restart Play Mode.
 
 ## Relay + hazard physics pass (2026-10-02, commit `576fa1f`)
 

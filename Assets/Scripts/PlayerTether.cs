@@ -17,7 +17,9 @@ namespace SyncRush
     /// (NetworkVariables, read by every peer to draw the rope) plus one discrete event: the
     /// launch RPC to the partner's owner, who applies it to their own owner-simulated movement.
     ///
-    /// Targets the nearest player in range for now (aim targeting comes with the rope pass).
+    /// Targets the player you're looking at (within _aimAngle of screen centre), falling back to
+    /// the nearest player in range. While idle, the owner sees a range preview: a thin line to that
+    /// player plus their distance over their head (green in range, grey if still too far).
     /// Tow and Recover come later in M1.
     /// </summary>
     [RequireComponent(typeof(SyncRushPlayerController))]
@@ -49,15 +51,38 @@ namespace SyncRush
         [Tooltip("Seconds before the same partner can be slingshot again (GDD: 6 s per pair).")]
         [SerializeField] private float _cooldown = 6f;
 
+        [Header("Targeting (GDD §5.4)")]
+        [Tooltip("Degrees from the centre of the camera view within which a player counts as aimed at. " +
+                 "With nobody aimed at, the nearest player in range is picked.")]
+        [SerializeField] private float _aimAngle = 25f;
+
+        [Tooltip("Players out to this multiple of max rope length still get a (grey) range preview, " +
+                 "so you can see how much closer you need to get.")]
+        [SerializeField] private float _previewRangeFactor = 2f;
+
         [Header("Rope Visual (greybox)")]
         [Tooltip("Optional. Needs a vertex-colour shader (e.g. Sprites/Default) for the tension tint to show.")]
         [SerializeField] private Material _ropeMaterial;
         [SerializeField] private Color _slackColor = Color.white;
         [SerializeField] private Color _tautColor = Color.red;
-        [SerializeField] private float _ropeWidth = 0.08f;
+        [SerializeField] private float _ropeWidth = 0.2f;
 
         [Tooltip("Rope width once stretched past max length, so the strain reads visually.")]
-        [SerializeField] private float _strainedRopeWidth = 0.18f;
+        [SerializeField] private float _strainedRopeWidth = 0.35f;
+
+        [Tooltip("Width of the owner-only preview line to the aimed player while not anchored.")]
+        [SerializeField] private float _previewWidth = 0.15f;
+
+        [Tooltip("Points along the rope. More = smoother sag curve.")]
+        [SerializeField] private int _ropeSegments = 24;
+
+        [Tooltip("How far the rope droops at its middle with no tension. It straightens as tension builds.")]
+        [SerializeField] private float _maxSag = 4f;
+
+        [Tooltip("Sideways shake (metres) when stretched past max length, so the strain reads visually.")]
+        [SerializeField] private float _strainShake = 0.35f;
+
+        [SerializeField] private float _strainShakeSpeed = 40f;
 
         // Owner-written contract state; every peer reads it to draw the rope.
         private readonly NetworkVariable<TetherState> _state =
@@ -72,6 +97,9 @@ namespace SyncRush
         private SyncRushPlayerController _controller;
         private CharacterController _cc;
         private Transform _visual;
+        // Owner only: who the range preview points at, and whether a press would tether them.
+        private PlayerTether _previewTarget;
+        private bool _previewInRange;
         private LineRenderer _rope;
 
         // Owner only: partner NetworkObjectId → Time.time when they can be slingshot again.
@@ -90,7 +118,7 @@ namespace SyncRush
             _visual = transform.Find("Model");
 
             _rope = gameObject.AddComponent<LineRenderer>();
-            _rope.positionCount = 2;
+            _rope.positionCount = Mathf.Max(2, _ropeSegments);
             _rope.useWorldSpace = true;
             _rope.material = _ropeMaterial != null ? _ropeMaterial : new Material(Shader.Find("Sprites/Default"));
             _rope.enabled = false;
@@ -122,7 +150,7 @@ namespace SyncRush
             if (_state.Value != TetherState.Idle) return;
             if (gameObject.scene.name != LobbyManager.GameSceneName) return;
 
-            PlayerTether partner = FindNearestPartner();
+            PlayerTether partner = FindTarget(_maxRopeLength);
             if (partner == null) return;
 
             _partnerId.Value = partner.NetworkObjectId;
@@ -153,6 +181,21 @@ namespace SyncRush
             _controller.InputLocked = false;
         }
 
+        private void Update()
+        {
+            // Range preview: who a press would pick right now, else who you're heading toward but
+            // still out of range. BeginAnchor re-picks on press.
+            _previewTarget = null;
+            bool canTarget = IsOwner && IsSpawned && _state.Value == TetherState.Idle
+                             && gameObject.scene.name == LobbyManager.GameSceneName;
+            if (!canTarget) return;
+
+            _previewTarget = FindTarget(_maxRopeLength);
+            _previewInRange = _previewTarget != null;
+            if (!_previewInRange)
+                _previewTarget = FindTarget(_maxRopeLength * _previewRangeFactor);
+        }
+
         private void FixedUpdate()
         {
             if (!IsOwner || !IsSpawned || _state.Value != TetherState.Anchored) return;
@@ -168,23 +211,41 @@ namespace SyncRush
             _tension.Value = Mathf.MoveTowards(_tension.Value, stretch, Time.fixedDeltaTime / _tensionTime);
         }
 
-        private PlayerTether FindNearestPartner()
+        /// <summary>
+        /// The player closest to the centre of the camera view, within _aimAngle (GDD §5.4: rival
+        /// by aim-target); otherwise the nearest one. Nearest stands in for "partner by default"
+        /// until teams exist. Skips anyone beyond maxDistance or on cooldown.
+        /// </summary>
+        private PlayerTether FindTarget(float maxDistance)
         {
-            PlayerTether best = null;
-            float bestDist = _maxRopeLength;
+            Camera cam = Camera.main;
+            PlayerTether aimed = null;
+            PlayerTether nearest = null;
+            float bestAngle = _aimAngle;
+            float bestDist = maxDistance;
+
             foreach (var other in Spawned)
             {
                 if (other == this) continue;
                 if (_nextAllowedTime.TryGetValue(other.NetworkObjectId, out float t) && Time.time < t) continue;
 
                 float dist = Vector3.Distance(AttachPoint, other.AttachPoint);
+                if (dist > maxDistance) continue;
                 if (dist <= bestDist)
                 {
-                    best = other;
+                    nearest = other;
                     bestDist = dist;
                 }
+
+                if (cam == null) continue;
+                float angle = Vector3.Angle(cam.transform.forward, other.AttachPoint - cam.transform.position);
+                if (angle < bestAngle)
+                {
+                    aimed = other;
+                    bestAngle = angle;
+                }
             }
-            return best;
+            return aimed != null ? aimed : nearest;
         }
 
         private PlayerTether ResolvePartner()
@@ -221,29 +282,67 @@ namespace SyncRush
                     Physics.IgnoreCollision(_cc, other, ignore);
         }
 
-        // ── Every peer: rope visual ───────────────────────────────────────────
+        // ── Rope visual: the real rope on every peer, the range preview for the owner ──
 
         private void LateUpdate()
         {
             PlayerTether partner = IsSpawned && _state.Value == TetherState.Anchored ? ResolvePartner() : null;
-            _rope.enabled = partner != null;
-            if (partner == null) return;
+            if (partner != null)
+            {
+                float tension = _tension.Value;
+                bool strained = Vector3.Distance(AttachPoint, partner.AttachPoint) > _maxRopeLength;
+                Color color = Color.Lerp(_slackColor, _tautColor, tension);
+                DrawLine(partner, color, strained ? _strainedRopeWidth : _ropeWidth,
+                         sag: _maxSag * (1f - tension), shake: strained ? _strainShake : 0f);
+            }
+            else if (_previewTarget != null)
+            {
+                // Kept straight and thin so it never reads as a real rope.
+                Color color = _previewInRange ? ReadyColor : OutOfRangeColor;
+                color.a = 0.85f;
+                DrawLine(_previewTarget, color, _previewWidth, sag: 0f, shake: 0f);
+            }
+            else
+            {
+                _rope.enabled = false;
+            }
+        }
 
+        /// <summary>
+        /// Draws the line to another player as a curve: a parabolic droop of <paramref name="sag"/>
+        /// metres at the middle, plus a sideways wobble of <paramref name="shake"/> metres that is
+        /// zero at both ends. Purely visual, computed locally on each peer from replicated state.
+        /// </summary>
+        private void DrawLine(PlayerTether to, Color color, float width, float sag, float shake)
+        {
             Vector3 from = AttachPoint;
-            Vector3 to = partner.AttachPoint;
-            _rope.SetPosition(0, from);
-            _rope.SetPosition(1, to);
+            Vector3 end = to.AttachPoint;
+            Vector3 side = Vector3.Cross(end - from, Vector3.up);
+            side = side.sqrMagnitude > 0.0001f ? side.normalized : Vector3.right; // rope straight up/down
 
-            Color color = Color.Lerp(_slackColor, _tautColor, _tension.Value);
+            int count = _rope.positionCount;
+            for (int i = 0; i < count; i++)
+            {
+                float t = i / (count - 1f);
+                float bulge = 4f * t * (1f - t); // 0 at the ends, 1 in the middle
+                Vector3 point = Vector3.Lerp(from, end, t) + Vector3.down * (sag * bulge);
+                if (shake > 0f)
+                    point += side * (shake * bulge * Mathf.Sin(Time.time * _strainShakeSpeed + t * 12f));
+                _rope.SetPosition(i, point);
+            }
+
+            _rope.enabled = true;
             _rope.startColor = color;
             _rope.endColor = color;
-            _rope.widthMultiplier = Vector3.Distance(from, to) > _maxRopeLength ? _strainedRopeWidth : _ropeWidth;
+            _rope.widthMultiplier = width;
         }
 
         // ── Owner: HUD (TEMP greybox OnGUI, replaced in the M4 presentation pass) ──
 
         private static readonly Color ReadyColor = new(0.2f, 0.75f, 0.35f);
         private static readonly Color CooldownColor = new(0.45f, 0.45f, 0.5f);
+        // Amber, not grey: the course floor is light grey, so a grey preview line vanished against it.
+        private static readonly Color OutOfRangeColor = new(1f, 0.6f, 0.1f);
         private GUIStyle _hudLabel;
 
         /// <summary>
@@ -267,6 +366,9 @@ namespace SyncRush
                 return;
             }
 
+            if (_previewTarget != null)
+                DrawTargetMarker(_previewTarget, _previewInRange);
+
             int rows = 0;
             foreach (var pair in _nextAllowedTime)
             {
@@ -277,12 +379,35 @@ namespace SyncRush
                     ? $"Player {obj.OwnerClientId}"
                     : "Player";
                 var rect = new Rect(x, y - rows * (height + 6f), width, height);
-                DrawBar(rect, 1f - remaining / _cooldown, CooldownColor, $"TETHER {name}  {remaining:0.0}s");
+                DrawBar(rect, 1f - remaining / _cooldown, CooldownColor, $"SLINGSHOT {name}  {remaining:0.0}s");
                 rows++;
             }
 
             if (rows == 0)
-                DrawBar(new Rect(x, y, width, height), 1f, ReadyColor, "TETHER READY");
+                DrawBar(new Rect(x, y, width, height), 1f, ReadyColor, "SLINGSHOT READY");
+        }
+
+        /// <summary>
+        /// Marker above the aimed player's head with their distance: green if a press would tether
+        /// them, grey with the max range if they're still too far.
+        /// </summary>
+        private void DrawTargetMarker(PlayerTether target, bool inRange)
+        {
+            Camera cam = Camera.main;
+            if (cam == null) return;
+
+            Vector3 head = target.AttachPoint + Vector3.up * (target._cc.height * 0.5f + 1f);
+            Vector3 screen = cam.WorldToScreenPoint(head);
+            if (screen.z <= 0f) return; // behind the camera
+
+            float distance = Vector3.Distance(AttachPoint, target.AttachPoint);
+            string text = inRange ? $"▼ SLINGSHOT {distance:0}m" : $"▼ {distance:0}m / {_maxRopeLength:0}m";
+
+            var rect = new Rect(screen.x - 120f, Screen.height - screen.y - 32f, 240f, 32f);
+            Color previous = GUI.contentColor;
+            GUI.contentColor = inRange ? ReadyColor : OutOfRangeColor;
+            GUI.Label(rect, text, _hudLabel);
+            GUI.contentColor = previous;
         }
 
         private void DrawBar(Rect rect, float fill, Color color, string text)

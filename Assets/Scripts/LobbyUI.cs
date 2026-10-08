@@ -19,7 +19,8 @@ namespace SyncRush
     ///   - Host sees a "START GAME" button — calls LobbyManager.StartGame()
     ///     which uses NGO NetworkSceneManager to load GameScene for everyone.
     ///   - Clients see "Waiting for host to start..." — no start button.
-    ///   - Both see a "LEAVE" button.
+    ///   - Both see a "LEAVE" button, and a "COPY" button that puts the code on the clipboard
+    ///     so it can be pasted to friends.
     ///
     /// Scene separation:
     ///   This canvas lives in LobbyScene only. GameScene has no lobby UI.
@@ -55,6 +56,7 @@ namespace SyncRush
         // ── Waiting panel ─────────────────────────────────────────────────────
         [Header("Waiting Panel")]
         [SerializeField] private TextMeshProUGUI _waitingCodeDisplay;
+        [SerializeField] private Button _copyCodeButton;
         [SerializeField] private TextMeshProUGUI _waitingStatusText;
         [SerializeField] private TextMeshProUGUI _playerCountText;
         [SerializeField] private Button _startGameButton;   // host-only
@@ -64,6 +66,10 @@ namespace SyncRush
         private TextMeshProUGUI _joinConfirmLabel;
         private string _startHostIdleText;
         private string _joinConfirmIdleText;
+
+        private const float CopiedFeedbackSeconds = 1.5f;
+        private TextMeshProUGUI _copyCodeLabel;
+        private string _copyCodeIdleText;
 
         // ── Unity ─────────────────────────────────────────────────────────────
 
@@ -94,40 +100,56 @@ namespace SyncRush
 
             // Waiting panel
             _startGameButton.onClick.AddListener(OnStartGameClicked);
+            _copyCodeButton.onClick.AddListener(OnCopyCodeClicked);
+            _copyCodeLabel = _copyCodeButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (_copyCodeLabel != null) _copyCodeIdleText = _copyCodeLabel.text;
             _leaveButton.onClick.AddListener(OnLeaveClicked);
         }
 
-        private void OnEnable()
-        {
-            if (LobbyManager.Instance == null) return;
+        // Unity doesn't order Awake/OnEnable across objects, so LobbyUI.OnEnable can run before
+        // LobbyManager.Awake has set Instance. Subscribing only in OnEnable then silently missed
+        // every event (Start Lobby succeeded but the UI never left the Host panel). Start always
+        // runs after every Awake, so it retries; _subscribedTo stops a double subscription.
+        private LobbyManager _subscribedTo;
 
-            LobbyManager.Instance.OnHostStarted      += HandleHostStarted;
-            LobbyManager.Instance.OnClientConnected  += HandleClientConnected;
-            LobbyManager.Instance.OnConnectionFailed += HandleConnectionFailed;
-            LobbyManager.Instance.OnHostFailed       += HandleHostFailed;
-            LobbyManager.Instance.OnPlayerJoined     += HandlePlayerJoined;
-            LobbyManager.Instance.OnPlayerLeft       += HandlePlayerLeft;
-            LobbyManager.Instance.OnSessionEnded     += HandleSessionEnded;
-            LobbyManager.Instance.OnPlayerCountChanged += HandlePlayerCountChanged;
+        private void OnEnable() => Subscribe();
+
+        private void Start()
+        {
+            Subscribe();
+            ShowMainPanel();
+        }
+
+        private void Subscribe()
+        {
+            var lm = LobbyManager.Instance;
+            if (_subscribedTo != null || lm == null) return;
+
+            lm.OnHostStarted        += HandleHostStarted;
+            lm.OnClientConnected    += HandleClientConnected;
+            lm.OnConnectionFailed   += HandleConnectionFailed;
+            lm.OnHostFailed         += HandleHostFailed;
+            lm.OnPlayerJoined       += HandlePlayerJoined;
+            lm.OnPlayerLeft         += HandlePlayerLeft;
+            lm.OnSessionEnded       += HandleSessionEnded;
+            lm.OnPlayerCountChanged += HandlePlayerCountChanged;
+            _subscribedTo = lm;
         }
 
         private void OnDisable()
         {
-            if (LobbyManager.Instance == null) return;
+            var lm = _subscribedTo;
+            if (lm == null) return;
 
-            LobbyManager.Instance.OnHostStarted      -= HandleHostStarted;
-            LobbyManager.Instance.OnClientConnected  -= HandleClientConnected;
-            LobbyManager.Instance.OnConnectionFailed -= HandleConnectionFailed;
-            LobbyManager.Instance.OnHostFailed       -= HandleHostFailed;
-            LobbyManager.Instance.OnPlayerJoined     -= HandlePlayerJoined;
-            LobbyManager.Instance.OnPlayerLeft       -= HandlePlayerLeft;
-            LobbyManager.Instance.OnSessionEnded     -= HandleSessionEnded;
-            LobbyManager.Instance.OnPlayerCountChanged -= HandlePlayerCountChanged;
-        }
-
-        private void Start()
-        {
-            ShowMainPanel();
+            lm.OnHostStarted        -= HandleHostStarted;
+            lm.OnClientConnected    -= HandleClientConnected;
+            lm.OnConnectionFailed   -= HandleConnectionFailed;
+            lm.OnHostFailed         -= HandleHostFailed;
+            lm.OnPlayerJoined       -= HandlePlayerJoined;
+            lm.OnPlayerLeft         -= HandlePlayerLeft;
+            lm.OnSessionEnded       -= HandleSessionEnded;
+            lm.OnPlayerCountChanged -= HandlePlayerCountChanged;
+            _subscribedTo = null;
         }
 
         // ── Button handlers ───────────────────────────────────────────────────
@@ -163,6 +185,23 @@ namespace SyncRush
         {
             // Only the host can start — button is hidden for clients anyway
             LobbyManager.Instance.StartGame();
+        }
+
+        private void OnCopyCodeClicked()
+        {
+            string code = LobbyManager.Instance.CurrentCode;
+            if (string.IsNullOrEmpty(code)) return;
+
+            GUIUtility.systemCopyBuffer = code;
+            if (_copyCodeLabel == null) return;
+            _copyCodeLabel.text = "COPIED!";
+            CancelInvoke(nameof(ResetCopyLabel));
+            Invoke(nameof(ResetCopyLabel), CopiedFeedbackSeconds);
+        }
+
+        private void ResetCopyLabel()
+        {
+            if (_copyCodeLabel != null) _copyCodeLabel.text = _copyCodeIdleText;
         }
 
         private void OnLeaveClicked()
