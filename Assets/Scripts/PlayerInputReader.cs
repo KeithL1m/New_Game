@@ -34,6 +34,8 @@ namespace SyncRush
         public event Action OnAttackPressed;
         public event Action OnTetherPressed;
         public event Action OnTetherReleased;
+        public event Action OnTowPressed;
+        public event Action OnTowReleased;
         public event Action OnFireDartPressed;
 
         // ── Internal ──────────────────────────────────────────────────────────
@@ -92,6 +94,13 @@ namespace SyncRush
             {
                 OnTetherReleased?.Invoke();
             }
+        }
+
+        // Hold to tow the nearest player along your path, release to let go.
+        public void OnTow(InputAction.CallbackContext ctx)
+        {
+            if (ctx.performed) OnTowPressed?.Invoke();
+            else if (ctx.canceled) OnTowReleased?.Invoke();
         }
 
         // These stubs satisfy the interface for actions not yet wired to gameplay

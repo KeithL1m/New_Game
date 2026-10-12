@@ -6,7 +6,14 @@ using UnityEngine;
 namespace SyncRush
 {
     /// <summary>
-    /// The Sync Tether, slingshot slice (GDD §5.3, M1).
+    /// The Sync Tether: Slingshot and Tow (GDD §5.3, M1).
+    ///
+    /// Tow: hold Tow (RMB) to hook the nearest free player within max rope length. While held,
+    /// the leader runs at _towLeaderSpeedMultiplier, and the towed player's own machine adds a
+    /// pull of up to _towSpeedFraction of the leader's speed, steering along the path the leader
+    /// ran (breadcrumbs) rather than straight at them. No pull inside _towSlackLength; snaps past
+    /// _towBreakLength. Only the leader's state and speed replicate. Each player still moves only
+    /// themselves.
     ///
     /// Hold Tether near another player to anchor to them: the anchor is locked in place and
     /// tension builds with the partner's distance (0→1 over 1.2 s with the rope fully out at
@@ -20,12 +27,13 @@ namespace SyncRush
     /// Targets the player you're looking at (within _aimAngle of screen centre), falling back to
     /// the nearest player in range. While idle, the owner sees a range preview: a thin line to that
     /// player plus their distance over their head (green in range, grey if still too far).
-    /// Tow and Recover come later in M1.
+    /// Recover comes later in M1. A player can be in only one rope at a time: nobody can hook a
+    /// player who is anchoring, towing, or already on someone else's rope.
     /// </summary>
     [RequireComponent(typeof(SyncRushPlayerController))]
     public class PlayerTether : NetworkBehaviour
     {
-        public enum TetherState : byte { Idle, Anchored }
+        public enum TetherState : byte { Idle, Anchored, Towing }
 
         [Header("Slingshot (GDD §5.3)")]
         [SerializeField] private float _maxRopeLength = 36f;
@@ -50,6 +58,32 @@ namespace SyncRush
 
         [Tooltip("Seconds before the same partner can be slingshot again (GDD: 6 s per pair).")]
         [SerializeField] private float _cooldown = 6f;
+
+        [Header("Tow (GDD §5.3)")]
+        [Tooltip("No pull while the towed player is closer than this. Pull ramps up from here to max rope length.")]
+        [SerializeField] private float _towSlackLength = 10f;
+
+        // Full pull well before max rope length: ramping all the way to 36 m meant the pull faded
+        // as the partner closed in, which felt like a weak rubber band (playtest 2026-10-12).
+        [Tooltip("Distance at which the pull reaches full strength. It holds there until the rope snaps.")]
+        [SerializeField] private float _towFullPullLength = 20f;
+
+        // Above 1 so a partner who isn't moving (stunned, just respawned) is still dragged along, and
+        // a running partner closes fast. 0.6, then 1.1, both felt weak in playtests (2026-10-12).
+        [Tooltip("Pull speed at full stretch, as a fraction of the leader's current speed.")]
+        [SerializeField] private float _towSpeedFraction = 1.5f;
+
+        [Tooltip("The tow snaps if the players get further apart than this.")]
+        [SerializeField] private float _towBreakLength = 54f;
+
+        [Tooltip("Leader's run/sprint speed multiplier while towing: the cost of pulling someone.")]
+        [SerializeField] private float _towLeaderSpeedMultiplier = 0.85f;
+
+        [Tooltip("Metres between recorded points of the leader's path, which the towed player is pulled along.")]
+        [SerializeField] private float _trailSpacing = 1f;
+
+        [Tooltip("A path point counts as reached within this horizontal distance.")]
+        [SerializeField] private float _trailReachRadius = 2f;
 
         [Header("Targeting (GDD §5.4)")]
         [Tooltip("Degrees from the centre of the camera view within which a player counts as aimed at. " +
@@ -86,10 +120,14 @@ namespace SyncRush
                  "capsule centre (2.5 m up), so full sag used to bury the middle in the floor.")]
         [SerializeField] private float _groundClearance = 0.4f;
 
-        [Tooltip("Sideways shake (metres) when stretched past max length, so the strain reads visually.")]
-        [SerializeField] private float _strainShake = 0.35f;
+        [Tooltip("Sideways shake (metres) at the snap point. Past max length the shake builds from a fraction " +
+                 "of this up to all of it at _towBreakLength, so players can see the rope is about to go.")]
+        [SerializeField] private float _strainShake = 1f;
 
         [SerializeField] private float _strainShakeSpeed = 40f;
+
+        [Tooltip("Colour the rope darkens toward as it nears the snap point.")]
+        [SerializeField] private Color _snapColor = new(0.35f, 0f, 0f);
 
         // Owner-written contract state; every peer reads it to draw the rope.
         private readonly NetworkVariable<TetherState> _state =
@@ -98,8 +136,12 @@ namespace SyncRush
             new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
         private readonly NetworkVariable<float> _tension =
             new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+        // Tow leader's measured horizontal speed; the towed player's pull is a fraction of it.
+        private readonly NetworkVariable<float> _leaderSpeed =
+            new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
         private static readonly List<PlayerTether> Spawned = new();
+        private const int MaxTrailPoints = 128;
 
         private SyncRushPlayerController _controller;
         private CharacterController _cc;
@@ -111,6 +153,10 @@ namespace SyncRush
 
         // Owner only: partner NetworkObjectId → Time.time when they can be slingshot again.
         private readonly Dictionary<ulong, float> _nextAllowedTime = new();
+
+        // Owner of a towed player: the leader's path as seen locally, oldest point first.
+        private readonly Queue<Vector3> _trail = new();
+        private Vector3 _lastTrailPoint;
 
         public TetherState State => _state.Value;
 
@@ -138,6 +184,8 @@ namespace SyncRush
 
             _controller.InputReader.OnTetherPressed  += BeginAnchor;
             _controller.InputReader.OnTetherReleased += Release;
+            _controller.InputReader.OnTowPressed     += BeginTow;
+            _controller.InputReader.OnTowReleased    += ReleaseTow;
         }
 
         public override void OnNetworkDespawn()
@@ -147,15 +195,22 @@ namespace SyncRush
 
             _controller.InputReader.OnTetherPressed  -= BeginAnchor;
             _controller.InputReader.OnTetherReleased -= Release;
+            _controller.InputReader.OnTowPressed     -= BeginTow;
+            _controller.InputReader.OnTowReleased    -= ReleaseTow;
             _controller.InputLocked = false;
+            _controller.SpeedMultiplier = 1f;
+            _controller.TowVelocity = Vector3.zero;
         }
 
         // ── Owner: contract ───────────────────────────────────────────────────
 
+        private bool CanStartContract =>
+            _state.Value == TetherState.Idle && FindHolder() == null
+            && gameObject.scene.name == LobbyManager.GameSceneName;
+
         private void BeginAnchor()
         {
-            if (_state.Value != TetherState.Idle) return;
-            if (gameObject.scene.name != LobbyManager.GameSceneName) return;
+            if (!CanStartContract) return;
 
             PlayerTether partner = FindTarget(_maxRopeLength);
             if (partner == null) return;
@@ -172,7 +227,7 @@ namespace SyncRush
 
             float tension = _tension.Value;
             PlayerTether partner = ResolvePartner();
-            EndAnchor();
+            EndContract();
             if (partner == null || tension < _minReleaseTension) return;
 
             Vector3 dir = (AttachPoint - partner.AttachPoint).normalized;
@@ -181,11 +236,33 @@ namespace SyncRush
             _nextAllowedTime[partner.NetworkObjectId] = Time.time + _cooldown;
         }
 
-        private void EndAnchor()
+        private void BeginTow()
+        {
+            if (!CanStartContract) return;
+
+            // Nearest, not aimed: the player you tow is usually behind you.
+            PlayerTether partner = FindNearestFree(_maxRopeLength);
+            if (partner == null) return;
+
+            _partnerId.Value = partner.NetworkObjectId;
+            _tension.Value = 0f;
+            _leaderSpeed.Value = 0f;
+            _state.Value = TetherState.Towing;
+            _controller.SpeedMultiplier = _towLeaderSpeedMultiplier;
+        }
+
+        private void ReleaseTow()
+        {
+            if (_state.Value == TetherState.Towing) EndContract();
+        }
+
+        private void EndContract()
         {
             _state.Value = TetherState.Idle;
             _tension.Value = 0f;
+            _leaderSpeed.Value = 0f;
             _controller.InputLocked = false;
+            _controller.SpeedMultiplier = 1f;
         }
 
         private void Update()
@@ -193,9 +270,7 @@ namespace SyncRush
             // Range preview: who a press would pick right now, else who you're heading toward but
             // still out of range. BeginAnchor re-picks on press.
             _previewTarget = null;
-            bool canTarget = IsOwner && IsSpawned && _state.Value == TetherState.Idle
-                             && gameObject.scene.name == LobbyManager.GameSceneName;
-            if (!canTarget || IsBeingAnchored()) return;
+            if (!IsOwner || !IsSpawned || !CanStartContract) return;
 
             _previewTarget = FindTarget(_maxRopeLength);
             _previewInRange = _previewTarget != null;
@@ -205,23 +280,101 @@ namespace SyncRush
 
         private void FixedUpdate()
         {
-            if (!IsOwner || !IsSpawned || _state.Value != TetherState.Anchored) return;
+            if (!IsOwner || !IsSpawned) return;
+
+            UpdateBeingTowed();
+            if (_state.Value == TetherState.Idle) return;
 
             PlayerTether partner = ResolvePartner();
             if (partner == null)
             {
-                EndAnchor(); // partner left the session
+                EndContract(); // partner left the session
                 return;
             }
 
-            float stretch = Mathf.Clamp01(Vector3.Distance(AttachPoint, partner.AttachPoint) / _maxRopeLength);
-            _tension.Value = Mathf.MoveTowards(_tension.Value, stretch, Time.fixedDeltaTime / _tensionTime);
+            float distance = Vector3.Distance(AttachPoint, partner.AttachPoint);
+            if (_state.Value == TetherState.Anchored)
+            {
+                float stretch = Mathf.Clamp01(distance / _maxRopeLength);
+                _tension.Value = Mathf.MoveTowards(_tension.Value, stretch, Time.fixedDeltaTime / _tensionTime);
+                return;
+            }
+
+            // Towing. Also snaps when either player respawns far away.
+            if (distance > _towBreakLength)
+            {
+                EndContract();
+                return;
+            }
+            _tension.Value = TowPull(distance); // drives the rope's sag and tint like slingshot tension
+            _leaderSpeed.Value = _controller.HorizontalSpeed;
         }
+
+        /// <summary>0 inside slack length, rising to 1 at _towFullPullLength, and held at 1 until the rope snaps.</summary>
+        private float TowPull(float distance) => Mathf.InverseLerp(_towSlackLength, _towFullPullLength, distance);
+
+        // ── Towed player's owner: pull along the leader's path ────────────────
+
+        /// <summary>
+        /// Runs on the towed player's own machine, which simulates their movement. Records the
+        /// leader's replicated position as breadcrumbs and pulls toward the oldest one not yet
+        /// reached, so the towed player follows the leader around obstacles instead of being
+        /// dragged straight at them.
+        /// </summary>
+        private void UpdateBeingTowed()
+        {
+            PlayerTether leader = FindHolder(TetherState.Towing);
+            if (leader == null)
+            {
+                _trail.Clear();
+                _controller.TowVelocity = Vector3.zero;
+                return;
+            }
+
+            Vector3 leaderPos = leader.transform.position;
+            if (_trail.Count == 0 || (leaderPos - _lastTrailPoint).sqrMagnitude >= _trailSpacing * _trailSpacing)
+            {
+                if (_trail.Count >= MaxTrailPoints) _trail.Dequeue();
+                _trail.Enqueue(leaderPos);
+                _lastTrailPoint = leaderPos;
+            }
+
+            Vector3 target = NextTrailPoint(leaderPos);
+            Vector3 dir = Vector3.ProjectOnPlane(target - transform.position, Vector3.up);
+            if (dir.sqrMagnitude < 0.0001f)
+            {
+                _controller.TowVelocity = Vector3.zero;
+                return;
+            }
+
+            float pull = TowPull(Vector3.Distance(AttachPoint, leader.AttachPoint));
+            _controller.TowVelocity = dir.normalized * (leader._leaderSpeed.Value * _towSpeedFraction * pull);
+        }
+
+        /// <summary>
+        /// Drops path points already reached, or already passed (further from the leader than we
+        /// are, e.g. after running ahead under our own steam). Falls back to the leader if none remain.
+        /// </summary>
+        private Vector3 NextTrailPoint(Vector3 leaderPos)
+        {
+            Vector3 me = transform.position;
+            float myDistToLeader = FlatDistance(me, leaderPos);
+            while (_trail.Count > 0)
+            {
+                Vector3 point = _trail.Peek();
+                if (FlatDistance(me, point) > _trailReachRadius && FlatDistance(point, leaderPos) < myDistToLeader)
+                    return point;
+                _trail.Dequeue();
+            }
+            return leaderPos;
+        }
+
+        private static float FlatDistance(Vector3 a, Vector3 b) => Vector2.Distance(new Vector2(a.x, a.z), new Vector2(b.x, b.z));
 
         /// <summary>
         /// The player closest to the centre of the camera view, within _aimAngle (GDD §5.4: rival
         /// by aim-target); otherwise the nearest one. Nearest stands in for "partner by default"
-        /// until teams exist. Skips anyone beyond maxDistance or on cooldown.
+        /// until teams exist. Skips anyone beyond maxDistance, on cooldown, or already in a rope.
         /// </summary>
         private PlayerTether FindTarget(float maxDistance)
         {
@@ -233,7 +386,7 @@ namespace SyncRush
 
             foreach (var other in Spawned)
             {
-                if (other == this) continue;
+                if (other == this || !other.IsFree) continue;
                 if (_nextAllowedTime.TryGetValue(other.NetworkObjectId, out float t) && Time.time < t) continue;
 
                 float dist = Vector3.Distance(AttachPoint, other.AttachPoint);
@@ -255,13 +408,40 @@ namespace SyncRush
             return aimed != null ? aimed : nearest;
         }
 
-        /// <summary>True while another player holds us on their rope; our preview would just overlap it.</summary>
-        private bool IsBeingAnchored()
+        /// <summary>Nearest free player within maxDistance, ignoring aim. Tow has no cooldown.</summary>
+        private PlayerTether FindNearestFree(float maxDistance)
+        {
+            PlayerTether nearest = null;
+            float bestDist = maxDistance;
+            foreach (var other in Spawned)
+            {
+                if (other == this || !other.IsFree) continue;
+                float dist = Vector3.Distance(AttachPoint, other.AttachPoint);
+                if (dist <= bestDist)
+                {
+                    nearest = other;
+                    bestDist = dist;
+                }
+            }
+            return nearest;
+        }
+
+        /// <summary>Not anchoring, towing, or on anyone else's rope.</summary>
+        private bool IsFree => _state.Value == TetherState.Idle && FindHolder() == null;
+
+        /// <summary>
+        /// The player holding us on their rope (in <paramref name="state"/>, or any state if null),
+        /// or null. While held, our own range preview is hidden, since it would just overlap their rope.
+        /// </summary>
+        private PlayerTether FindHolder(TetherState? state = null)
         {
             foreach (var other in Spawned)
-                if (other != this && other._state.Value == TetherState.Anchored && other._partnerId.Value == NetworkObjectId)
-                    return true;
-            return false;
+            {
+                if (other == this || other._state.Value == TetherState.Idle) continue;
+                if (state.HasValue && other._state.Value != state.Value) continue;
+                if (other._partnerId.Value == NetworkObjectId) return other;
+            }
+            return null;
         }
 
         private PlayerTether ResolvePartner()
@@ -302,21 +482,33 @@ namespace SyncRush
 
         private void LateUpdate()
         {
-            PlayerTether partner = IsSpawned && _state.Value == TetherState.Anchored ? ResolvePartner() : null;
+            PlayerTether partner = IsSpawned && _state.Value != TetherState.Idle ? ResolvePartner() : null;
             if (partner != null)
             {
                 float tension = _tension.Value;
-                bool strained = Vector3.Distance(AttachPoint, partner.AttachPoint) > _maxRopeLength;
-                Color color = Color.Lerp(_slackColor, _tautColor, tension);
-                DrawLine(partner, color, strained ? _strainedRopeWidth : _ropeWidth,
-                         sag: _maxSag * (1f - tension), shake: strained ? _strainShake : 0f);
+                float distance = Vector3.Distance(AttachPoint, partner.AttachPoint);
+                if (distance <= _maxRopeLength)
+                {
+                    DrawLine(partner, Color.Lerp(_slackColor, _tautColor, tension), _ropeWidth,
+                             sag: _maxSag * (1f - tension), shake: 0f, shakeSpeed: 0f);
+                }
+                else
+                {
+                    // Overstretched: builds from a light tremble at max length to a violent, dark,
+                    // thick shake where a tow snaps. A slingshot rope can stretch further; it just stays maxed.
+                    float strain = Mathf.InverseLerp(_maxRopeLength, _towBreakLength, distance);
+                    DrawLine(partner, Color.Lerp(_tautColor, _snapColor, strain),
+                             Mathf.Lerp(_ropeWidth, _strainedRopeWidth, Mathf.Lerp(0.3f, 1f, strain)),
+                             sag: 0f, shake: _strainShake * Mathf.Lerp(0.15f, 1f, strain),
+                             shakeSpeed: _strainShakeSpeed * Mathf.Lerp(0.6f, 1.5f, strain));
+                }
             }
             else if (_previewTarget != null)
             {
                 // Kept straight and thin so it never reads as a real rope.
                 Color color = _previewInRange ? ReadyColor : OutOfRangeColor;
                 color.a = 0.85f;
-                DrawLine(_previewTarget, color, _previewWidth, sag: 0f, shake: 0f);
+                DrawLine(_previewTarget, color, _previewWidth, sag: 0f, shake: 0f, shakeSpeed: 0f);
             }
             else
             {
@@ -329,7 +521,7 @@ namespace SyncRush
         /// metres at the middle, plus a sideways wobble of <paramref name="shake"/> metres that is
         /// zero at both ends. Purely visual, computed locally on each peer from replicated state.
         /// </summary>
-        private void DrawLine(PlayerTether to, Color color, float width, float sag, float shake)
+        private void DrawLine(PlayerTether to, Color color, float width, float sag, float shake, float shakeSpeed)
         {
             Vector3 from = AttachPoint;
             Vector3 end = to.AttachPoint;
@@ -344,7 +536,7 @@ namespace SyncRush
                 float bulge = 4f * t * (1f - t); // 0 at the ends, 1 in the middle
                 Vector3 point = Vector3.Lerp(from, end, t) + Vector3.down * (sag * bulge);
                 if (shake > 0f)
-                    point += side * (shake * bulge * Mathf.Sin(Time.time * _strainShakeSpeed + t * 12f));
+                    point += side * (shake * bulge * Mathf.Sin(Time.time * shakeSpeed + t * 12f));
                 _rope.SetPosition(i, point);
             }
 
@@ -374,6 +566,7 @@ namespace SyncRush
 
         private static readonly Color ReadyColor = new(0.2f, 0.75f, 0.35f);
         private static readonly Color CooldownColor = new(0.45f, 0.45f, 0.5f);
+        private static readonly Color TowColor = new(0.25f, 0.55f, 0.95f);
         // Amber, not grey: the course floor is light grey, so a grey preview line vanished against it.
         private static readonly Color OutOfRangeColor = new(1f, 0.6f, 0.1f);
         private GUIStyle _hudLabel;
@@ -398,6 +591,18 @@ namespace SyncRush
                 DrawBar(new Rect(x, y, width, height), _tension.Value, _tautColor, $"TENSION {_tension.Value * 100f:0}%");
                 return;
             }
+            if (_state.Value == TetherState.Towing)
+            {
+                DrawBar(new Rect(x, y, width, height), _tension.Value, TowColor, $"TOWING {PlayerName(_partnerId.Value)}");
+                return;
+            }
+            PlayerTether towedBy = FindHolder(TetherState.Towing);
+            if (towedBy != null)
+            {
+                DrawBar(new Rect(x, y, width, height), towedBy._tension.Value, TowColor,
+                        $"TOWED BY {PlayerName(towedBy.NetworkObjectId)}");
+                return;
+            }
 
             if (_previewTarget != null)
                 DrawTargetMarker(_previewTarget, _previewInRange);
@@ -408,9 +613,7 @@ namespace SyncRush
                 float remaining = pair.Value - Time.time;
                 if (remaining <= 0f) continue;
 
-                string name = NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(pair.Key, out var obj)
-                    ? $"Player {obj.OwnerClientId}"
-                    : "Player";
+                string name = PlayerName(pair.Key);
                 var rect = new Rect(x, y - rows * (height + 6f), width, height);
                 DrawBar(rect, 1f - remaining / _cooldown, CooldownColor, $"SLINGSHOT {name}  {remaining:0.0}s");
                 rows++;
@@ -442,6 +645,11 @@ namespace SyncRush
             GUI.Label(rect, text, _hudLabel);
             GUI.contentColor = previous;
         }
+
+        private string PlayerName(ulong networkObjectId) =>
+            NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var obj)
+                ? $"Player {obj.OwnerClientId}"
+                : "Player";
 
         private void DrawBar(Rect rect, float fill, Color color, string text)
         {

@@ -127,6 +127,15 @@ namespace SyncRush
         /// <summary>Blocks move and jump input (gravity and knockback still apply). Set by a tether anchor while holding.</summary>
         [HideInInspector] public bool InputLocked;
 
+        /// <summary>Multiplier on run/sprint speed. A tow leader runs slower while pulling.</summary>
+        [HideInInspector] public float SpeedMultiplier = 1f;
+
+        /// <summary>Horizontal velocity added on top of input each tick. Set every tick by PlayerTether while being towed.</summary>
+        [HideInInspector] public Vector3 TowVelocity;
+
+        /// <summary>Horizontal speed actually moved last tick (m/s), after collisions. A tow leader shares it with the partner.</summary>
+        public float HorizontalSpeed { get; private set; }
+
         // ── Public accessor for InputReader (used by PlayerCameraController) ──
         public PlayerInputReader InputReader => _inputReader;
 
@@ -257,12 +266,13 @@ namespace SyncRush
             else
                 _stamina = Mathf.Min(_staminaMax, _stamina + dt / _staminaRecoverRate);
 
-            float currentSpeed = wantsSprint ? _sprintSpeed : _baseSpeed;
+            float currentSpeed = (wantsSprint ? _sprintSpeed : _baseSpeed) * SpeedMultiplier;
 
             // ── Horizontal movement ──────────────────────────────────────────
             _stunTimer -= dt;
             bool stunned = _stunTimer > 0f;
-            Vector2 rawInput = stunned || InputLocked ? Vector2.zero : _inputReader.MoveInput * InputDirectionMultiplier;
+            Vector2 moveInput = _debugAutoRun ? Vector2.up : _inputReader.MoveInput;
+            Vector2 rawInput = stunned || InputLocked ? Vector2.zero : moveInput * InputDirectionMultiplier;
             Vector3 wishDir = new Vector3(rawInput.x, 0f, rawInput.y);
             wishDir = transform.TransformDirection(wishDir);
 
@@ -302,12 +312,14 @@ namespace SyncRush
                 horizontal.x + _externalVelocity.x,
                 _velocity.y,
                 horizontal.z + _externalVelocity.z);
-            motion += platformSlide;
+            motion += platformSlide + TowVelocity;
             Vector3 step = motion * dt + platformCarry;
             _groundNormalYThisMove = -1f;
             _cc.Move(step);
             _hasFooting = _cc.isGrounded && HasWalkableGround();
             _currentPosition = transform.position;
+            Vector3 moved = _currentPosition - positionBeforeMove - platformCarry;
+            HorizontalSpeed = new Vector3(moved.x, 0f, moved.z).magnitude / dt;
             DebugLogUnexpectedMotion(positionBeforeMove, step, platformCarry, platformSlide);
 
             UpdatePlatformContact();
@@ -317,6 +329,26 @@ namespace SyncRush
             if (_hasFooting && !stunned) _knockbackAirborne = false;
             if (_hasFooting || (!stunned && !_knockbackAirborne))
                 _externalVelocity = Vector3.Lerp(_externalVelocity, Vector3.zero, dt * _externalVelocityDamping);
+        }
+
+        // ── TEMP DEBUG: F8 toggles auto-run forward, so on one machine an MPPM virtual player can
+        // keep running (e.g. while being towed) after focus moves to the host window. Remove once
+        // two-machine testing is available.
+        private bool _debugAutoRun;
+
+        private void Update()
+        {
+            if (UnityEngine.InputSystem.Keyboard.current?.f8Key.wasPressedThisFrame == true)
+            {
+                _debugAutoRun = !_debugAutoRun;
+                Debug.Log($"[SyncRushPlayerController] Debug auto-run {(_debugAutoRun ? "ON" : "OFF")}");
+            }
+        }
+
+        private void OnGUI()
+        {
+            if (_debugAutoRun)
+                GUI.Label(new Rect(10f, 10f, 300f, 24f), "AUTO-RUN (F8)");
         }
 
         private void LateUpdate()
