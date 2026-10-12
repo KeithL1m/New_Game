@@ -3,25 +3,31 @@
 Tracks implementation status against [GDD.md](GDD.md). Update this file whenever a
 GDD system is added, changed, or a milestone gate is crossed — don't let it drift.
 
-Last verified against repo: **2026-10-07** (end of session), on top of pushed commit `f10d97d` plus the uncommitted
-work listed below. The Editor reports no compile errors.
+Last verified against repo: **2026-10-12**, on top of commit `d749c2c` plus uncommitted `PlayerTether.cs` changes
+(rope sag clamp, preview hidden while anchored) and this file. The Editor reports no compile errors.
 
 ---
-## ▶ Start here next session (written 2026-10-07)
+## ▶ Start here next session (updated 2026-10-12)
 
-**1. Uncommitted work: test it, then commit.** Everything after `f10d97d` is uncommitted
-(`PlayerTether.cs`, `PlayerPrefab.prefab`, `LobbyUI.cs`, `RebuildLobbyUI.cs`, `LobbyScene.unity`, this file):
+**1. Test pass on the 2026-10-07 work: done (2026-10-12, host + MPPM).** That work was committed in `d749c2c`.
 
 | Change | Tested? |
 |---|---|
 | Lobby COPY button + fix for being stuck on the Create Lobby panel | ✅ Play Mode and user |
-| Aim targeting (pick the player nearest screen centre, 25° cone) | ⬜ Needs 3+ players: add 2 MPPM virtual players |
-| Range preview line + distance marker (green in range, amber out of range) | 🟨 Seen working; amber colour change not yet seen |
-| HUD labels renamed "Tether" → "Slingshot" | 🟨 Seen in a screenshot (`SLINGSHOT READY`) |
-| Rope visuals: sag that straightens with tension, shake past 36 m, thicker rope | ⬜ Hold LMB within 36 m of another player to see it |
+| Aim targeting (pick the player nearest screen centre, 25° cone) | ✅ User, 3 players |
+| Range preview line + distance marker (green in range, amber out of range) | ✅ User |
+| HUD labels renamed "Tether" → "Slingshot" | ✅ User |
+| Rope visuals: sag that straightens with tension, white→red tint | ✅ User screenshot from the partner's (client) view, so rope state replicates. Shake past 36 m not specifically checked |
 
-Expect a large `LobbyScene.unity` diff: the UI builder regenerates the whole canvas.
-Restart any running MPPM virtual player before testing, because the prefab file was edited directly.
+**Fixed 2026-10-12 (uncommitted):** the rope was invisible in the first test. It attaches at capsule centre (2.5 m up)
+and sagged up to 4 m, so its middle was buried in the floor. Sag is now capped at 12% of rope length (`_sagPerMetre`)
+and kept 0.4 m above the ground under the rope's midpoint (`_groundClearance`, a downward raycast, so it can
+still hang into gaps). Also, a player being held on someone's rope no longer draws their own range preview, which
+overlapped the rope. The preview-hiding change compiles but hasn't been seen in play yet.
+
+**Feedback from the test:** the user expected the rope to behave like real rope physics. The current rope is a
+fixed tension-driven curve, which reads as fairly subtle. That makes the "Rope physics" option in item 2 more
+relevant than first thought.
 
 **2. Pick the next feature** (open question, the user hasn't chosen yet):
 - **Tow**, the second rope move (recommended): the player in front pulls a trailing partner along with part of the leader's speed. It does more for the M1 question "is the tether fun?".

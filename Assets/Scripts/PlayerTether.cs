@@ -79,6 +79,13 @@ namespace SyncRush
         [Tooltip("How far the rope droops at its middle with no tension. It straightens as tension builds.")]
         [SerializeField] private float _maxSag = 4f;
 
+        [Tooltip("Max droop as a fraction of rope length, so a short rope doesn't hang in a deep V.")]
+        [SerializeField] private float _sagPerMetre = 0.12f;
+
+        [Tooltip("Lowest the rope's middle may hang above the ground under it. The rope attaches at " +
+                 "capsule centre (2.5 m up), so full sag used to bury the middle in the floor.")]
+        [SerializeField] private float _groundClearance = 0.4f;
+
         [Tooltip("Sideways shake (metres) when stretched past max length, so the strain reads visually.")]
         [SerializeField] private float _strainShake = 0.35f;
 
@@ -188,7 +195,7 @@ namespace SyncRush
             _previewTarget = null;
             bool canTarget = IsOwner && IsSpawned && _state.Value == TetherState.Idle
                              && gameObject.scene.name == LobbyManager.GameSceneName;
-            if (!canTarget) return;
+            if (!canTarget || IsBeingAnchored()) return;
 
             _previewTarget = FindTarget(_maxRopeLength);
             _previewInRange = _previewTarget != null;
@@ -246,6 +253,15 @@ namespace SyncRush
                 }
             }
             return aimed != null ? aimed : nearest;
+        }
+
+        /// <summary>True while another player holds us on their rope; our preview would just overlap it.</summary>
+        private bool IsBeingAnchored()
+        {
+            foreach (var other in Spawned)
+                if (other != this && other._state.Value == TetherState.Anchored && other._partnerId.Value == NetworkObjectId)
+                    return true;
+            return false;
         }
 
         private PlayerTether ResolvePartner()
@@ -317,6 +333,7 @@ namespace SyncRush
         {
             Vector3 from = AttachPoint;
             Vector3 end = to.AttachPoint;
+            sag = ClampSag(from, end, sag);
             Vector3 side = Vector3.Cross(end - from, Vector3.up);
             side = side.sqrMagnitude > 0.0001f ? side.normalized : Vector3.right; // rope straight up/down
 
@@ -335,6 +352,22 @@ namespace SyncRush
             _rope.startColor = color;
             _rope.endColor = color;
             _rope.widthMultiplier = width;
+        }
+
+        /// <summary>
+        /// Limits droop to a fraction of rope length and keeps the middle above whatever ground is
+        /// under it. Over a gap the raycast misses, so the rope can still hang down into it.
+        /// </summary>
+        private float ClampSag(Vector3 from, Vector3 end, float sag)
+        {
+            if (sag <= 0f) return 0f;
+            sag = Mathf.Min(sag, Vector3.Distance(from, end) * _sagPerMetre);
+
+            Vector3 mid = (from + end) * 0.5f;
+            if (Physics.Raycast(mid, Vector3.down, out RaycastHit hit, sag + _groundClearance,
+                                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                sag = Mathf.Max(0f, hit.distance - _groundClearance);
+            return sag;
         }
 
         // ── Owner: HUD (TEMP greybox OnGUI, replaced in the M4 presentation pass) ──
