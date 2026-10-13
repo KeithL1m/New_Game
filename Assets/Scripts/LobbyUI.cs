@@ -21,6 +21,8 @@ namespace SyncRush
     ///   - Clients see "Waiting for host to start..." — no start button.
     ///   - Both see a "LEAVE" button, and a "COPY" button that puts the code on the clipboard
     ///     so it can be pasted to friends.
+    ///   - Both see one column per team with a JOIN button and the team's players. Joining
+    ///     players are auto-assigned (NetworkPlayer); the buttons let them switch if there's room.
     ///
     /// Scene separation:
     ///   This canvas lives in LobbyScene only. GameScene has no lobby UI.
@@ -61,6 +63,11 @@ namespace SyncRush
         [SerializeField] private TextMeshProUGUI _playerCountText;
         [SerializeField] private Button _startGameButton;   // host-only
         [SerializeField] private Button _leaveButton;
+
+        [Header("Teams")]
+        [Tooltip("Index = team id (0 blue, 1 red).")]
+        [SerializeField] private Button[] _teamButtons;
+        [SerializeField] private TextMeshProUGUI[] _teamLists;
 
         private TextMeshProUGUI _startHostLabel;
         private TextMeshProUGUI _joinConfirmLabel;
@@ -104,6 +111,12 @@ namespace SyncRush
             _copyCodeLabel = _copyCodeButton.GetComponentInChildren<TextMeshProUGUI>();
             if (_copyCodeLabel != null) _copyCodeIdleText = _copyCodeLabel.text;
             _leaveButton.onClick.AddListener(OnLeaveClicked);
+
+            for (int i = 0; i < _teamButtons.Length; i++)
+            {
+                int team = i;
+                _teamButtons[i].onClick.AddListener(() => NetworkPlayer.Local?.RequestTeam(team));
+            }
         }
 
         // Unity doesn't order Awake/OnEnable across objects, so LobbyUI.OnEnable can run before
@@ -112,7 +125,11 @@ namespace SyncRush
         // runs after every Awake, so it retries; _subscribedTo stops a double subscription.
         private LobbyManager _subscribedTo;
 
-        private void OnEnable() => Subscribe();
+        private void OnEnable()
+        {
+            Subscribe();
+            NetworkPlayer.OnRosterChanged += RefreshTeams;
+        }
 
         private void Start()
         {
@@ -138,6 +155,8 @@ namespace SyncRush
 
         private void OnDisable()
         {
+            NetworkPlayer.OnRosterChanged -= RefreshTeams;
+
             var lm = _subscribedTo;
             if (lm == null) return;
 
@@ -290,7 +309,11 @@ namespace SyncRush
 
         private void ShowHostPanel()    => SetActivePanel(_hostPanel);
         private void ShowJoinPanel()    => SetActivePanel(_joinPanel);
-        private void ShowWaitingPanel() => SetActivePanel(_waitingPanel);
+        private void ShowWaitingPanel()
+        {
+            SetActivePanel(_waitingPanel);
+            RefreshTeams();
+        }
 
         private void SetActivePanel(GameObject active)
         {
@@ -306,6 +329,39 @@ namespace SyncRush
         {
             int count = LobbyManager.Instance.PlayerCount;
             _playerCountText.text = $"Players: {count} / {LobbyManager.MaxPlayers}";
+        }
+
+        /// <summary>
+        /// Lists each team's players and enables a team's JOIN button only if this player could
+        /// switch to it (not already on it, and it has room). The server re-checks on request.
+        /// </summary>
+        private void RefreshTeams()
+        {
+            var local = NetworkPlayer.Local;
+            var names = new System.Text.StringBuilder();
+            for (int team = 0; team < _teamLists.Length && team < NetworkPlayer.TeamCount; team++)
+            {
+                names.Clear();
+                foreach (var p in NetworkPlayer.All)
+                {
+                    if (p.TeamId != team) continue;
+                    names.Append(p.DisplayName);
+                    if (p == local) names.Append(" (you)");
+                    names.Append('\n');
+                }
+                _teamLists[team].text = names.Length > 0 ? names.ToString().TrimEnd() : "-";
+
+                if (team >= _teamButtons.Length) continue;
+                bool onTeam = local != null && local.TeamId == team;
+                bool full = NetworkPlayer.CountOnTeam(team) >= NetworkPlayer.MaxTeamSize;
+                _teamButtons[team].interactable = local != null && !onTeam && !full;
+
+                var label = _teamButtons[team].GetComponentInChildren<TextMeshProUGUI>();
+                if (label != null)
+                    label.text = onTeam ? $"{NetworkPlayer.TeamNames[team]} (YOU)"
+                               : full   ? $"{NetworkPlayer.TeamNames[team]} (FULL)"
+                                        : $"JOIN {NetworkPlayer.TeamNames[team]}";
+            }
         }
 
         private void SetHostBusy(bool busy)

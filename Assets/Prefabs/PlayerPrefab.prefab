@@ -16,6 +16,7 @@ GameObject:
   - component: {fileID: 2880036301485314712}
   - component: {fileID: 6255552780534007852}
   - component: {fileID: 952393235015384072}
+  - component: {fileID: 1949581178165433476}
   m_Layer: 0
   m_Name: PlayerPrefab
   m_TagString: Untagged
@@ -190,6 +191,8 @@ MonoBehaviour:
   FrictionMultiplier: 1
   GravityMultiplier: 1
   InputLocked: 0
+  SpeedMultiplier: 1
+  TowVelocity: {x: 0, y: 0, z: 0}
   _debugLogPushes: 1
 --- !u!114 &6255552780534007852
 MonoBehaviour:
@@ -222,13 +225,44 @@ MonoBehaviour:
   _minLaunchSpeed: 12
   _maxLaunchSpeed: 40
   _launchLift: 14
+  _passThroughTime: 1
   _minReleaseTension: 0.1
   _cooldown: 6
+  _towSlackLength: 10
+  _towFullPullLength: 20
+  _towSpeedFraction: 1.5
+  _towBreakLength: 54
+  _towLeaderSpeedMultiplier: 0.85
+  _trailSpacing: 1
+  _trailReachRadius: 2
+  _aimAngle: 25
+  _previewRangeFactor: 2
   _ropeMaterial: {fileID: 2100000, guid: 820a9fa3f9e11164e8c529a5910f533d, type: 2}
   _slackColor: {r: 1, g: 1, b: 1, a: 1}
   _tautColor: {r: 1, g: 0, b: 0, a: 1}
   _ropeWidth: 0.2
   _strainedRopeWidth: 0.35
+  _previewWidth: 0.15
+  _ropeSegments: 24
+  _maxSag: 4
+  _sagPerMetre: 0.12
+  _groundClearance: 0.4
+  _strainShake: 1
+  _strainShakeSpeed: 40
+  _snapColor: {r: 0.35, g: 0, b: 0, a: 1}
+--- !u!114 &1949581178165433476
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7634273746890508597}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bf78aa19ee7a54d499274c6fcbe70bbe, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SyncRush.NetworkPlayer
+  ShowTopMostFoldoutHeaderGroup: 1
 --- !u!1 &7634273746890508598
 GameObject:
   m_ObjectHideFlags: 0
@@ -240,7 +274,6 @@ GameObject:
   - component: {fileID: 815965242163657425}
   - component: {fileID: 8263636934425255683}
   - component: {fileID: 2194598586608393219}
-  - component: {fileID: 1282986860231394598}
   m_Layer: 0
   m_Name: Model
   m_TagString: Untagged
@@ -320,16 +353,3 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
---- !u!114 &1282986860231394598
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7634273746890508598}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: ac35373b42abe46ea8f7cab1a1c353f0, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Unity.Multiplayer.Center.NetcodeForGameObjectsExample::Unity.Multiplayer.Center.NetcodeForGameObjectsExample.SetColorBasedOnOwnerId
-  ShowTopMostFoldoutHeaderGroup: 1

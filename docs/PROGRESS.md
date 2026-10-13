@@ -49,6 +49,32 @@ partner closes 36 → 10 m in ~3–4 s. The rope also turns fully red at 20 m du
 (`SyncRushPlayerController._debugAutoRun`, shows `AUTO-RUN (F8)` top-left), so a virtual player can keep running
 while being towed on one machine. Remove it once two-machine testing exists.
 
+**3. Teams implemented 2026-10-12, untested (uncommitted).** See `PlayerRegistry` in the Foundation table. Also:
+lobby team columns (`LobbyUI._teamButtons/_teamLists`, built by `RebuildLobbyUI`, so `LobbyScene` was regenerated),
+and rope targeting now prefers your partner. Slingshot: aimed, else partner, else nearest. Tow: partner, else nearest.
+Saving the prefab serialized every `PlayerTether` field, so tune Tow/rope values on the prefab now, not via code defaults.
+Test (restart the MPPM virtual player, because the prefab gained a NetworkBehaviour):
+- Host + 1 VP: auto-assigned to different teams (blue / red capsules, lobby columns).
+- Switch the VP to BLUE: both columns and the capsule colour update on both screens; the full team's button greys out.
+- In game: teams can't change. On different teams, RMB does nothing (Tow is teammates only). On the same team, RMB tows.
+- Tow: partner runs past you while towed → pull stops (no drag-back).
+- Slingshot a rival → 15 s cooldown bar; a teammate → 6 s.
+
+**User test 2026-10-12: teams, teammates-only Tow and the rival cooldown all work.** The rival cooldown was raised
+12 → 15 s afterwards because 12 s still felt abusable (not re-tested; it's a single value).
+
+**Rope rules decided 2026-10-12 (after the user found they could still rope the other team, which is intended per
+GDD §5.4):** (1) **Tow is teammates only.** It's a catch-up move, so with no partner (duel, FFA, other team) RMB does
+nothing. This deviates from GDD §5.4's "the tether can target any player"; Slingshot keeps that rule. (2) **Tow only
+pulls while the partner is behind the leader**, measured against the leader's run direction (from the last two path
+points), not facing, so glancing back doesn't cut it. Before this, a towed player ahead of the leader was dragged
+backward, which with rivals was a strong grief. (3) **Slingshot cooldown on a rival is 15 s** (`_rivalCooldown`, first 12 s), 6 s
+on a teammate, because slingshotting a rival is mainly sabotage (launching them into hazards).
+
+**Design decisions 2026-10-12:** no separate selectable modes for now. Mode follows player count as GDD §5.4 says,
+and 2v2 is the focus. A free-for-all would be "every player on their own team" if playtests want it later.
+Teams: auto-assign plus a manual switch, as above.
+
 **Feedback from the test:** the user expected the rope to behave like real rope physics. The current rope is a
 fixed tension-driven curve, which reads as fairly subtle. That makes the "Rope physics" option in item 2 more
 relevant than first thought.
@@ -93,7 +119,7 @@ if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is 
 | Owner-simulated movement (`CharacterController`) | ✅ Implemented, GDD values wired in Inspector | `Assets/Scripts/SyncRushPlayerController.cs` — base 7 m/s, sprint 10 m/s, air control 0.4, jump 1.8 m, coyote 0.12 s, stamina drain/recover |
 | `PlayerInputReader` snapshot | ✅ Implemented | `Assets/Scripts/PlayerInputReader.cs`, `Assets/Scripts/InputSystem_Actions.cs` |
 | Camera controller | ✅ Implemented, reworked 2026-09-23 | `Assets/Scripts/PlayerCameraController.cs` — mouse X yaws the player, mouse/stick Y now pitches the camera (see 2026-09-23 section) |
-| `PlayerRegistry` / team ID / placement / dart count | ⬜ Not yet | Not present in `LobbyManager` yet |
+| `PlayerRegistry` / team ID / placement / dart count | 🟨 Team ID implemented 2026-10-12, untested; placement/darts not yet | `Assets/Scripts/NetworkPlayer.cs` on `PlayerPrefab` (replaces the Multiplayer Center sample `SetColorBasedOnOwnerId` on `Model`, which coloured capsules randomly by client ID). A server-written `TeamId` NetworkVariable: two teams, BLUE (0) and RED (1), max 2 each. **Rules agreed with the user:** the server auto-assigns each joiner to the smaller team; in the lobby, JOIN BLUE / JOIN RED buttons ask the server to switch (`RequestTeamRpc`, refused if full); teams lock once in `GameScene`. Capsules take the team colour. Code asks only `Partner` / `IsTeammateOf`, never fixed team numbers, so a later free-for-all can put each player on their own team. **Open:** with 3 players auto-assign makes 2v1 and the buttons allow it, though GDD §5.4 says 3 players = FFA. Buttons stay on at every count for now so 2 players on one machine can test as partners. Revisit with the mode decision |
 | `SpawnPointRegistry` | ⬜ Not yet | |
 
 ## M0 systems (GDD §7.2, this milestone's slice)

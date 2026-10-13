@@ -253,13 +253,28 @@ public class RebuildLobbyUI
         // WAITING PANEL
         // ════════════════════════════════════════════════════════════════════
         var waitingPanel = MakePanel("WaitingPanel", canvasGO.transform, bg, false);
-        MakeTMP("WaitingTitle",   waitingPanel.transform, "LOBBY",                  48, white,                    new Vector2(0, 200), new Vector2(400, 70));
-        var codeDisplay     = MakeTMP("CodeDisplay",    waitingPanel.transform, "Your Code: ------", 34, white,   new Vector2(0, 120), new Vector2(700, 55));
-        var copyCodeBtn     = MakeButton("CopyCodeButton", waitingPanel.transform, "COPY",        new Vector2(270, 120), new Vector2(130, 50), grey);
-        var statusText      = MakeTMP("StatusText",     waitingPanel.transform, "Waiting for players...", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 55), new Vector2(700, 40));
-        var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 0),   new Vector2(400, 50));
-        var startGameBtn    = MakeButton("StartGameButton", waitingPanel.transform, "START GAME",  new Vector2(0, -80),  new Vector2(320, 70), new Color(0.1f, 0.7f, 0.3f));
-        var leaveBtn        = MakeButton("LeaveButton", waitingPanel.transform, "LEAVE LOBBY",     new Vector2(0, -165), new Vector2(280, 60), red);
+        MakeTMP("WaitingTitle",   waitingPanel.transform, "LOBBY",                  48, white,                    new Vector2(0, 280), new Vector2(400, 70));
+        var codeDisplay     = MakeTMP("CodeDisplay",    waitingPanel.transform, "Your Code: ------", 34, white,   new Vector2(0, 205), new Vector2(700, 55));
+        var copyCodeBtn     = MakeButton("CopyCodeButton", waitingPanel.transform, "COPY",        new Vector2(270, 205), new Vector2(130, 50), grey);
+        var statusText      = MakeTMP("StatusText",     waitingPanel.transform, "Waiting for players...", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 150), new Vector2(700, 40));
+        var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 105), new Vector2(400, 50));
+
+        // Teams: one column per team, JOIN button on top, player names below.
+        var teamButtons = new Button[NetworkPlayer.TeamCount];
+        var teamLists   = new TextMeshProUGUI[NetworkPlayer.TeamCount];
+        for (int team = 0; team < NetworkPlayer.TeamCount; team++)
+        {
+            float x = team == 0 ? -200f : 200f;
+            string teamName = NetworkPlayer.TeamNames[team];
+            teamButtons[team] = MakeButton($"Team{teamName}Button", waitingPanel.transform, $"JOIN {teamName}",
+                                           new Vector2(x, 35), new Vector2(300, 60), NetworkPlayer.TeamColors[team]);
+            teamLists[team] = MakeTMP($"Team{teamName}List", waitingPanel.transform, "-", 24, white,
+                                      new Vector2(x, -45), new Vector2(300, 90), TextAlignmentOptions.Top);
+            teamLists[team].enableWordWrapping = false;
+        }
+
+        var startGameBtn    = MakeButton("StartGameButton", waitingPanel.transform, "START GAME",  new Vector2(0, -150), new Vector2(320, 70), new Color(0.1f, 0.7f, 0.3f));
+        var leaveBtn        = MakeButton("LeaveButton", waitingPanel.transform, "LEAVE LOBBY",     new Vector2(0, -235), new Vector2(280, 60), red);
 
         // ── Wire LobbyUI ──────────────────────────────────────────────────────
         var lobbyUI = canvasGO.AddComponent<LobbyUI>();
@@ -288,6 +303,16 @@ public class RebuildLobbyUI
         so.FindProperty("_playerCountText").objectReferenceValue    = playerCountText;
         so.FindProperty("_startGameButton").objectReferenceValue    = startGameBtn;
         so.FindProperty("_leaveButton").objectReferenceValue        = leaveBtn;
+
+        var teamButtonsProp = so.FindProperty("_teamButtons");
+        var teamListsProp   = so.FindProperty("_teamLists");
+        teamButtonsProp.arraySize = teamButtons.Length;
+        teamListsProp.arraySize   = teamLists.Length;
+        for (int i = 0; i < teamButtons.Length; i++)
+        {
+            teamButtonsProp.GetArrayElementAtIndex(i).objectReferenceValue = teamButtons[i];
+            teamListsProp.GetArrayElementAtIndex(i).objectReferenceValue   = teamLists[i];
+        }
 
         so.ApplyModifiedPropertiesWithoutUndo();
 

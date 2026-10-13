@@ -8,7 +8,7 @@ namespace SyncRush
     /// <summary>
     /// The Sync Tether: Slingshot and Tow (GDD §5.3, M1).
     ///
-    /// Tow: hold Tow (RMB) to hook the nearest free player within max rope length. While held,
+    /// Tow: hold Tow (RMB) to hook your partner (teammates only) within max rope length. While held,
     /// the leader runs at _towLeaderSpeedMultiplier, and the towed player's own machine adds a
     /// pull of up to _towSpeedFraction of the leader's speed, steering along the path the leader
     /// ran (breadcrumbs) rather than straight at them. No pull inside _towSlackLength; snaps past
@@ -58,6 +58,12 @@ namespace SyncRush
 
         [Tooltip("Seconds before the same partner can be slingshot again (GDD: 6 s per pair).")]
         [SerializeField] private float _cooldown = 6f;
+
+        // Slingshotting a rival mostly helps them, so its real use is sabotage (launching them into
+        // a hazard). The longer cooldown stops that being repeated on the same rival. 12 s still
+        // felt abusable in playtest (2026-10-12), so 15 s.
+        [Tooltip("Seconds before the same rival (not your teammate) can be slingshot again.")]
+        [SerializeField] private float _rivalCooldown = 15f;
 
         [Header("Tow (GDD §5.3)")]
         [Tooltip("No pull while the towed player is closer than this. Pull ramps up from here to max rope length.")]
@@ -144,6 +150,7 @@ namespace SyncRush
         private const int MaxTrailPoints = 128;
 
         private SyncRushPlayerController _controller;
+        private NetworkPlayer _player;
         private CharacterController _cc;
         private Transform _visual;
         // Owner only: who the range preview points at, and whether a press would tether them.
@@ -157,6 +164,7 @@ namespace SyncRush
         // Owner of a towed player: the leader's path as seen locally, oldest point first.
         private readonly Queue<Vector3> _trail = new();
         private Vector3 _lastTrailPoint;
+        private Vector3 _leaderRunDir; // horizontal, from the last two path points; zero until known
 
         public TetherState State => _state.Value;
 
@@ -167,6 +175,7 @@ namespace SyncRush
         private void Awake()
         {
             _controller = GetComponent<SyncRushPlayerController>();
+            _player = GetComponent<NetworkPlayer>();
             _cc = GetComponent<CharacterController>();
             _visual = transform.Find("Model");
 
@@ -233,15 +242,15 @@ namespace SyncRush
             Vector3 dir = (AttachPoint - partner.AttachPoint).normalized;
             float speed = Mathf.Lerp(_minLaunchSpeed, _maxLaunchSpeed, tension);
             partner.SlingshotRpc(dir * speed + Vector3.up * _launchLift, NetworkObjectId);
-            _nextAllowedTime[partner.NetworkObjectId] = Time.time + _cooldown;
+            _nextAllowedTime[partner.NetworkObjectId] = Time.time + CooldownFor(partner);
         }
 
         private void BeginTow()
         {
             if (!CanStartContract) return;
 
-            // Nearest, not aimed: the player you tow is usually behind you.
-            PlayerTether partner = FindNearestFree(_maxRopeLength);
+            // Partner only; never aimed: the player you tow is usually behind you.
+            PlayerTether partner = FindTowTarget(_maxRopeLength);
             if (partner == null) return;
 
             _partnerId.Value = partner.NetworkObjectId;
@@ -327,6 +336,7 @@ namespace SyncRush
             if (leader == null)
             {
                 _trail.Clear();
+                _leaderRunDir = Vector3.zero;
                 _controller.TowVelocity = Vector3.zero;
                 return;
             }
@@ -334,9 +344,20 @@ namespace SyncRush
             Vector3 leaderPos = leader.transform.position;
             if (_trail.Count == 0 || (leaderPos - _lastTrailPoint).sqrMagnitude >= _trailSpacing * _trailSpacing)
             {
+                if (_trail.Count > 0)
+                    _leaderRunDir = Vector3.ProjectOnPlane(leaderPos - _lastTrailPoint, Vector3.up).normalized;
                 if (_trail.Count >= MaxTrailPoints) _trail.Dequeue();
                 _trail.Enqueue(leaderPos);
                 _lastTrailPoint = leaderPos;
+            }
+
+            // Catch-up only: once we're level with or ahead of the leader along the way they're
+            // running, stop pulling. Otherwise a partner who ran past would be dragged back.
+            // Uses the leader's run direction, not facing, so glancing back doesn't cut the pull.
+            if (Vector3.Dot(transform.position - leaderPos, _leaderRunDir) > 0f)
+            {
+                _controller.TowVelocity = Vector3.zero;
+                return;
             }
 
             Vector3 target = NextTrailPoint(leaderPos);
@@ -373,13 +394,15 @@ namespace SyncRush
 
         /// <summary>
         /// The player closest to the centre of the camera view, within _aimAngle (GDD §5.4: rival
-        /// by aim-target); otherwise the nearest one. Nearest stands in for "partner by default"
-        /// until teams exist. Skips anyone beyond maxDistance, on cooldown, or already in a rope.
+        /// by aim-target); otherwise your partner (partner by default); otherwise the nearest one,
+        /// for players with no partner (solo team). Skips anyone beyond maxDistance, on cooldown,
+        /// or already in a rope.
         /// </summary>
         private PlayerTether FindTarget(float maxDistance)
         {
             Camera cam = Camera.main;
             PlayerTether aimed = null;
+            PlayerTether partner = null;
             PlayerTether nearest = null;
             float bestAngle = _aimAngle;
             float bestDist = maxDistance;
@@ -391,6 +414,7 @@ namespace SyncRush
 
                 float dist = Vector3.Distance(AttachPoint, other.AttachPoint);
                 if (dist > maxDistance) continue;
+                if (IsPartner(other)) partner = other;
                 if (dist <= bestDist)
                 {
                     nearest = other;
@@ -405,25 +429,27 @@ namespace SyncRush
                     bestAngle = angle;
                 }
             }
-            return aimed != null ? aimed : nearest;
+            return aimed != null ? aimed : partner != null ? partner : nearest;
         }
 
-        /// <summary>Nearest free player within maxDistance, ignoring aim. Tow has no cooldown.</summary>
-        private PlayerTether FindNearestFree(float maxDistance)
+        private bool IsPartner(PlayerTether other) =>
+            other != null && _player != null && _player.IsTeammateOf(other._player);
+
+        private float CooldownFor(PlayerTether other) => IsPartner(other) ? _cooldown : _rivalCooldown;
+
+        /// <summary>
+        /// Tow target: your partner, if they're free and within maxDistance, else null. Tow is a
+        /// teammate catch-up move (user decision 2026-10-12, a deviation from GDD §5.4's "any
+        /// player" rule), so solo players (duel, FFA) have no Tow. Ignores aim; no cooldown.
+        /// </summary>
+        private PlayerTether FindTowTarget(float maxDistance)
         {
-            PlayerTether nearest = null;
-            float bestDist = maxDistance;
             foreach (var other in Spawned)
             {
-                if (other == this || !other.IsFree) continue;
-                float dist = Vector3.Distance(AttachPoint, other.AttachPoint);
-                if (dist <= bestDist)
-                {
-                    nearest = other;
-                    bestDist = dist;
-                }
+                if (other == this || !other.IsFree || !IsPartner(other)) continue;
+                if (Vector3.Distance(AttachPoint, other.AttachPoint) <= maxDistance) return other;
             }
-            return nearest;
+            return null;
         }
 
         /// <summary>Not anchoring, towing, or on anyone else's rope.</summary>
@@ -615,7 +641,10 @@ namespace SyncRush
 
                 string name = PlayerName(pair.Key);
                 var rect = new Rect(x, y - rows * (height + 6f), width, height);
-                DrawBar(rect, 1f - remaining / _cooldown, CooldownColor, $"SLINGSHOT {name}  {remaining:0.0}s");
+                float total = NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(pair.Key, out var obj)
+                    ? CooldownFor(obj.GetComponent<PlayerTether>())
+                    : _cooldown;
+                DrawBar(rect, 1f - remaining / total, CooldownColor, $"SLINGSHOT {name}  {remaining:0.0}s");
                 rows++;
             }
 
