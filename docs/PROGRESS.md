@@ -26,6 +26,10 @@ override code defaults, so tune them there. ⭐ = most important for the M1 gate
 | 9 | **3-player teams** | auto-assign gives 2v1 | Design decision, not tuning: GDD says 3 players = FFA. Decide with the mode question |
 | 10 | **Course layout** | greybox (2026-09-16) | User said it doesn't fully match what they're picturing yet |
 
+**Name (2026-10-12):** "Sync Rush" stays the working title for now. **"Rope Rush" is the top contender for the official
+name** (no Steam game with that name, per the user's check); "Strung Along" is the runner-up. Before deciding, also
+check the app stores and trademarks. The code namespace `SyncRush` can stay internal after a rename.
+
 **Debug left on, to remove later:** `[PushDebug]` logging (`SyncRushPlayerController._debugLogPushes`) and F8
 auto-run (`_debugAutoRun`). Keep F8 until two-machine testing exists.
 
