@@ -228,6 +228,7 @@ MonoBehaviour:
   _passThroughTime: 1
   _minReleaseTension: 0.1
   _cooldown: 6
+  _rivalCooldown: 15
   _towSlackLength: 10
   _towFullPullLength: 20
   _towSpeedFraction: 1.5
@@ -238,15 +239,12 @@ MonoBehaviour:
   _aimAngle: 25
   _previewRangeFactor: 2
   _ropeMaterial: {fileID: 2100000, guid: 820a9fa3f9e11164e8c529a5910f533d, type: 2}
-  _slackColor: {r: 1, g: 1, b: 1, a: 1}
+  _slackColor: {r: 0, g: 0, b: 0, a: 1}
   _tautColor: {r: 1, g: 0, b: 0, a: 1}
   _ropeWidth: 0.2
   _strainedRopeWidth: 0.35
   _previewWidth: 0.15
   _ropeSegments: 24
-  _maxSag: 4
-  _sagPerMetre: 0.12
-  _groundClearance: 0.4
   _strainShake: 1
   _strainShakeSpeed: 40
   _snapColor: {r: 0.35, g: 0, b: 0, a: 1}

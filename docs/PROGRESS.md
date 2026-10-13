@@ -3,11 +3,51 @@
 Tracks implementation status against [GDD.md](GDD.md). Update this file whenever a
 GDD system is added, changed, or a milestone gate is crossed — don't let it drift.
 
-Last verified against repo: **2026-10-12**, on top of commit `d749c2c` plus uncommitted `PlayerTether.cs` changes
-(rope sag clamp, preview hidden while anchored) and this file. The Editor reports no compile errors.
+Last verified against repo: **2026-10-12** (end of session), on top of pushed commit `35a45d8`, plus uncommitted work
+the user is committing: the simulated rope (`RopeVisual.cs` + `.meta`, new files), the rigid "tense" look, the
+heavy-drag leash, and this file. The Editor reports no compile errors.
+
+---
+## 🎯 Playtest & tuning backlog (things to judge by feel, ideally with a real friend)
+
+All values live on `PlayerPrefab` → `PlayerTether` / `SyncRushPlayerController` in the Inspector. Prefab values
+override code defaults, so tune them there. ⭐ = most important for the M1 gate "is the rope fun?".
+
+| # | What to test | Current values | Question to answer |
+|---|---|---|---|
+| 1 ⭐ | **Leash (heavy drag)**: user tested on one machine 2026-10-12, "feels good now" | `Leash Length` 36 m, `Leash Away Speed Factor` 0.5, `Leash Ramp Distance` 4 m, `Leash Drag Factor` 1, `Leash Respawn Grace` 3 s | What's the best leash length? Does 50% feel like mud? Does a strong player still ignore their partner? Does the drag feel fair to the dragged player? |
+| 2 ⭐ | **Tow feel** | `Tow Speed Fraction` 1.5, `Tow Full Pull Length` 20 m, `Tow Slack Length` 10 m, `Tow Leader Speed Multiplier` 0.85 | Felt "a bit weak" with auto-run (2026-10-12). With a human partner: strong enough? If not, make it more than catch-up (e.g. water-ski burst for both) |
+| 3 | **Tow path-following** | `Trail Spacing` 1 m, `Trail Reach Radius` 2 m | Does following the leader's path feel right, or is a straight-line pull better? (agreed fallback) |
+| 4 | **Slingshot** | range 36 m, launch 12–40 m/s + 14 lift, tension 1.2 s | Felt right 2026-10-07. Re-check now that the leash exists: landing past the leash drags the anchor along. Good synergy or annoying? |
+| 5 | **Rival slingshot cooldown** | `Rival Cooldown` 15 s (teammate 6 s) | Still abusable for sabotage? Too long? |
+| 6 | **Rope look** | `RopeVisual`: slack ×1.2 / +3 m, damping 0.985, 24 points; `Snap Width Factor` 0.6 | Too floaty, stiff or long? Is the rigid thinning look clear enough past the leash? |
+| 7 | **Aim targeting** | `Aim Angle` 25° | Easy to pick the intended player in a crowd? |
+| 8 | **Everything over real Relay** (also the M0 gate) | — | Leash and Tow both read the partner's position ~0.1 s late: any rubber-banding? Slingshot and hazards with real latency? |
+| 9 | **3-player teams** | auto-assign gives 2v1 | Design decision, not tuning: GDD says 3 players = FFA. Decide with the mode question |
+| 10 | **Course layout** | greybox (2026-09-16) | User said it doesn't fully match what they're picturing yet |
+
+**Debug left on, to remove later:** `[PushDebug]` logging (`SyncRushPlayerController._debugLogPushes`) and F8
+auto-run (`_debugAutoRun`). Keep F8 until two-machine testing exists.
 
 ---
 ## ▶ Start here next session (updated 2026-10-12)
+
+**0. Heavy-drag leash implemented 2026-10-12. User tested it on one machine and said it "feels good now" (uncommitted at session end).** Leash length is still to be found by playtesting (backlog row 1). It's the parked "soft leash" idea in a
+stronger form; the user chose it as better for the concept (cooperation enforced, and it gives the final-stretch snap
+its weight). How it works (`PlayerTether.UpdatePartnerPull`, each player's own machine, nothing new networked):
+- Teammates further apart than `_leashLength` (36 m, separate from slingshot range): the input-driven part of moving
+  **away** from your partner is scaled to 50% (`SyncRushPlayerController.LeashAwayDir/LeashAwayFactor`). Moving toward
+  them or sideways is unaffected. It ramps in over 4 m so it isn't a wall.
+- When your partner moves away from you past the leash, you're **dragged after them** along their path (Tow's
+  breadcrumbs) at their speed away from you. Their velocity is estimated from replicated positions.
+- **Off** during a Slingshot/Tow between the pair, while flying from a launch (`IsLaunched`: knockback, or airborne
+  with >5 m/s outside velocity, so slingshots and pads still gain ground), and for 3 s after either player teleports
+  more than 8 m in a tick (respawn).
+- The partner rope goes fully tense exactly at the leash length, so you see when the drag starts.
+- Tow now shares the partner path tracking (`RecordTrail` / `PullAlongTrail`); its behaviour is unchanged.
+Test (same team, VP on F8 auto-run as the partner who isn't moving / walking away): walk away → slows at 36 m and the
+partner is dragged; walk back → normal speed; Slingshot your partner past 36 m → no slowdown in flight; fall and
+respawn → no yank for 3 s.
 
 **1. Test pass on the 2026-10-07 work: done (2026-10-12, host + MPPM).** That work was committed in `d749c2c`.
 
@@ -40,7 +80,7 @@ If following the path plays badly, the agreed fallback is a straight-line pull t
 
 **Tow tuning after first test (2026-10-12):** the user confirmed the partner is dragged and the rope strains past
 36 m, but the pull felt weak on a partner who isn't moving. `_towSpeedFraction` 0.6 → 1.1, so a still partner is held taut at
-~33 m instead of falling behind and snapping. The strain shake now builds from max length to the snap point:
+~33 m instead of falling behind and snapping. The strain shake (since replaced by a rigid, thinning rope, see item 4) now builds from max length to the snap point:
 shake 15%→100% of `_strainShake` (now 1 m), shake speed 0.6×→1.5×, width up toward `_strainedRopeWidth`, colour
 red → dark red (`_snapColor`). **Second tuning pass (same day):** still weak with the partner auto-running. Cause: a running partner (7 m/s) already
 outruns a towing leader (~6 m/s), and the pull ramped all the way to 36 m, so it faded as they closed in. Now the pull
@@ -71,6 +111,28 @@ points), not facing, so glancing back doesn't cut it. Before this, a towed playe
 backward, which with rivals was a strong grief. (3) **Slingshot cooldown on a rival is 15 s** (`_rivalCooldown`, first 12 s), 6 s
 on a teammate, because slingshotting a rival is mainly sabotage (launching them into hazards).
 
+**4. Always-on partner rope + simulated rope implemented 2026-10-12, untested in play (uncommitted).**
+- `Assets/Scripts/RopeVisual.cs`: a visual-only verlet rope with 24 points (`_ropeSegments`) and gravity. Constraints only
+  pull segments together, so slack piles up. Points rest on the ground via a short raycast (players' capsules ignored),
+  with friction. Rope length adapts like a retractable leash: slack = max(gap × 1.2, gap + 3 m), capped at 36 m, and
+  pulled in to the gap as tension → 1. Gravity fades with tension, so taut rope is straight. If an end jumps more than
+  8 m in a frame (respawn), the rope resets. Each peer simulates its own copy; nothing is networked.
+- `PlayerTether`: teammates are roped together the whole time in `GameScene` (GDD §5.3 `Idle`). The lower
+  NetworkObjectId of the pair draws it. Slingshot/Tow between partners feed tension into that same rope, so release
+  lets the slack back out and it whips. A Slingshot on a rival uses a separate `RivalRope`, shown only while
+  anchored. The old fixed sag curve (`DrawLine`, `ClampSag`, `_maxSag`, `_sagPerMetre`, `_groundClearance`) was removed. The
+  range preview is now its own straight 2-point line.
+- **Rope is black when slack** (user request, for visibility on the light floor), red under tension. **Past 36 m it no
+  longer wobbles** (user request after first look: it should read as "extremely tense"). It's rigidly straight, thinning to
+  60% width (`_snapWidthFactor`) and darkening to dark red at the 54 m snap point. `_strainShake`/`_strainedRopeWidth` were removed. `_slackColor` is set to black on the prefab.
+- Checked in the Editor with a scripted sim run over a floor: values stay finite, slack rope rests on the floor, an
+  overstretched rope is straight, and a teleport resets cleanly. Not yet seen in Play Mode.
+- **Deferred:** the final-stretch SNAP (no `FinalStretch` race state yet; I didn't add a `Snap()` stub, since it's easy
+  to add to RopeVisual when needed) and the soft leash (since built as the heavy-drag leash, item 0). Ropes attach at capsule centre until there's a real character.
+Test (host + VP on the **same** team): rope lies on the ground when you're close; swings and trails when
+running/jumping; drapes off platform edges; taut and shaking past 36 m; slingshotting your partner tightens it,
+then it whips; respawning resets it; on different teams there's no rope until you Slingshot.
+
 **Design decisions 2026-10-12:** no separate selectable modes for now. Mode follows player count as GDD §5.4 says,
 and 2v2 is the focus. A free-for-all would be "every player on their own team" if playtests want it later.
 Teams: auto-assign plus a manual switch, as above.
@@ -91,7 +153,7 @@ a real rigged humanoid to keep (e.g. Mixamo, or Coplay auto-rig). The GDD wants 
 
 **4. Still deferred:**
 - **Two-machine Relay test** (no second machine yet). It's also needed for the M1 kill gate: playtest the tether with a real friend.
-- **Parked soft-leash idea:** an always-on partner rope that slows a player who strays too far. Revisit if playtests show players ignoring their partner (see "Design note, tether vs leash" below).
+- ~~**Parked soft-leash idea**~~: built 2026-10-12 as the heavy-drag leash (item 0).
 
 **Known quirks:** a one-off Multiplayer Tools `Ngo1Adapter` error can leave `NetworkManager` disabled. Restart Play Mode
 if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is still on in `SyncRushPlayerController`
@@ -103,7 +165,7 @@ if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is 
 | # | Deliverable | Status | Notes |
 |---|---|---|---|
 | **M0** | Race state machine, checkpoints, placement, greybox straight course | 🟨 In progress | Greybox straight course built by hand in ProBuilder (`GameScene`: `Platform`, `Starting`/`Checkpoint`/`Finish` pole gates, `Deathzone`). `RaceStateMachine`, `RaceCheckpoint`, `PlayerRaceProgress`, `DeathZone`, `SpawnPointRegistry` written and wired onto those objects. **2026-09-04:** first real two-client test (host + Multiplayer Play Mode virtual player) — host/join/countdown/GO all fired correctly and remote player movement replicated well on both sides. Since then, every M0 system has been verified with host + MPPM on one machine. The only M0 item left is the two-machine Relay test, deferred 2026-10-07 because no second machine is available |
-| **M1** | Tether + ragdoll-on-impact, 4 players over Relay | 🟨 In progress | Slingshot tether works on one machine (user playtest 2026-10-07, see M1 section). Tow works on one machine (2026-10-12), feel deferred to a live test. Not built yet: ragdoll (needs a rigged character, choice still open), Recover, teams + always-on rope |
+| **M1** | Tether + ragdoll-on-impact, 4 players over Relay | 🟨 In progress | Slingshot tether works on one machine (user playtest 2026-10-07, see M1 section). Tow works on one machine (2026-10-12), feel deferred to a live test. Teams (2026-10-12, user-tested) and the always-on simulated partner rope (2026-10-12, untested) are built. Not built yet: ragdoll (needs a rigged character, choice still open), Recover, final-stretch rope snap |
 | **M2** | Darts, status effects, ammo economy | ⬜ Not started | |
 | **M3** | Course generator, 15 chunks | ⬜ Not started | |
 | **M4** | Presentation pass | ⬜ Not started | |
@@ -195,7 +257,7 @@ All confirmed in single-player playtesting per the user (2026-09-23). **Not yet 
 
 | `TetherSystem`, Tow | 🟨 Works on one machine (host + MPPM, 2026-10-12). Feel judged "a bit weak" and deferred to a live two-player test | `Assets/Scripts/PlayerTether.cs` (`TetherState.Towing`). Hold **Tow** (new input action: RMB / gamepad left shoulder) to hook the nearest free player within 36 m, ignoring aim. The leader runs at 85% speed (`SyncRushPlayerController.SpeedMultiplier`). The towed player's own machine records the leader's replicated position as breadcrumbs every 1 m and adds `TowVelocity` toward the oldest point not yet reached or passed: `leaderSpeed × 0.6 × pull`, where pull ramps 0→1 from 10 m (`_towSlackLength`) to 36 m and holds at 1 until it snaps at 54 m (`_towBreakLength`). It's horizontal only, so the towed player keeps full control and jumps gaps themselves. Replication: the leader owns `Towing`/partner state plus a new `_leaderSpeed` NetworkVariable (from `SyncRushPlayerController.HorizontalSpeed`), with no per-tick RPCs. `_tension` doubles as tow pull, so the rope sags and tints the same way. HUD: `TOWING Player N` / `TOWED BY Player N` in blue. **Rule added to both moves:** you can't hook a player who is anchoring, towing or already on a rope, and you can't start a move while you're on someone's rope. **Input:** `InputSystem_Actions.inputactions.meta` now sets `wrapperCodePath` to `Assets/Scripts/InputSystem_Actions.cs`. It was blank, which would have generated a duplicate class next to the asset on reimport |
 
-**Design note, tether vs leash (2026-10-07, parked):** the user asked whether the rope should just keep partners together, as a leash. Decision: keep the GDD §5.3 action tether (Slingshot now, Tow/Recover later), not a physics leash. A hard leash mostly punishes, it's the GDD's top netcode risk (rubber-banding across two owners), and it undercuts the final-stretch betrayal. Open gap: with an optional tether, the pitch's "cooperation is mechanically enforced" is weak, since a strong player can ignore their partner. **Parked idea, not built:** an always-on partner rope (the GDD's `Idle` state) with a soft leash. When it's stretched past max length, the player out in front slows (e.g. −20% past 36 m). Each player only slows themselves, so it stays netcode-safe with no yank. Revisit if playtests show players ignoring their partner or the rope feeling optional, or once teams exist (2v2).
+**Design note, tether vs leash (2026-10-07; the soft leash was built 2026-10-12 as the heavy-drag leash, see "Start here" item 0):** the user asked whether the rope should just keep partners together, as a leash. Decision: keep the GDD §5.3 action tether (Slingshot now, Tow/Recover later), not a physics leash. A hard leash mostly punishes, it's the GDD's top netcode risk (rubber-banding across two owners), and it undercuts the final-stretch betrayal. Open gap: with an optional tether, the pitch's "cooperation is mechanically enforced" is weak, since a strong player can ignore their partner. **Parked idea, not built:** an always-on partner rope (the GDD's `Idle` state) with a soft leash. When it's stretched past max length, the player out in front slows (e.g. −20% past 36 m). Each player only slows themselves, so it stays netcode-safe with no yank. Revisit if playtests show players ignoring their partner or the rope feeling optional, or once teams exist (2v2).
 
 **Deathzone expanded (2026-10-07):** the trigger was a 1 m slab ending ~30–40 m past the course, and big launches carried players past its edge. Only the `BoxCollider` changed: local size `(4, 40, 8)`, center `(0, -19.5, 0)`, so world bounds are now x -1054..866, z ±624, y -19..21.2. The top surface and visible slab are unchanged.
 

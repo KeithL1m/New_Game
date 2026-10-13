@@ -133,6 +133,18 @@ namespace SyncRush
         /// <summary>Horizontal velocity added on top of input each tick. Set every tick by PlayerTether while being towed.</summary>
         [HideInInspector] public Vector3 TowVelocity;
 
+        /// <summary>
+        /// Leash: horizontal direction pointing away from the partner, or zero when the leash is off.
+        /// The input-driven part of movement along it is scaled by LeashAwayFactor; movement toward
+        /// the partner or sideways is untouched. Set every tick by PlayerTether.
+        /// </summary>
+        [HideInInspector] public Vector3 LeashAwayDir;
+        [HideInInspector] public float LeashAwayFactor = 1f;
+
+        /// <summary>Flying from a launch (hazard, slingshot, bounce pad): airborne with big outside velocity. The leash ignores these.</summary>
+        public bool IsLaunched =>
+            _knockbackAirborne || (!_hasFooting && new Vector2(_externalVelocity.x, _externalVelocity.z).sqrMagnitude > 25f);
+
         /// <summary>Horizontal speed actually moved last tick (m/s), after collisions. A tow leader shares it with the partner.</summary>
         public float HorizontalSpeed { get; private set; }
 
@@ -278,6 +290,11 @@ namespace SyncRush
 
             float control = grounded ? FrictionMultiplier : _airControl;
             Vector3 horizontal = wishDir * currentSpeed * control;
+            if (LeashAwayDir != Vector3.zero)
+            {
+                float away = Vector3.Dot(horizontal, LeashAwayDir);
+                if (away > 0f) horizontal -= LeashAwayDir * (away * (1f - LeashAwayFactor));
+            }
 
             // ── Gravity ──────────────────────────────────────────────────────
             _velocity.y -= _gravity * GravityMultiplier * dt;
