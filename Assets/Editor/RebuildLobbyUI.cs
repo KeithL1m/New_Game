@@ -257,14 +257,18 @@ public class RebuildLobbyUI
         var codeDisplay     = MakeTMP("CodeDisplay",    waitingPanel.transform, "Your Code: ------", 34, white,   new Vector2(0, 205), new Vector2(700, 55));
         var copyCodeBtn     = MakeButton("CopyCodeButton", waitingPanel.transform, "COPY",        new Vector2(270, 205), new Vector2(130, 50), grey);
         var statusText      = MakeTMP("StatusText",     waitingPanel.transform, "Waiting for players...", 22, new Color(0.7f,0.7f,0.7f), new Vector2(0, 150), new Vector2(700, 40));
-        var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 105), new Vector2(400, 50));
+        var playerCountText = MakeTMP("PlayerCountText",waitingPanel.transform, "Players: 0 / 4",  28, white,    new Vector2(0, 105), new Vector2(900, 50));
 
-        // Teams: one column per team, JOIN button on top, player names below.
-        var teamButtons = new Button[NetworkPlayer.TeamCount];
-        var teamLists   = new TextMeshProUGUI[NetworkPlayer.TeamCount];
-        for (int team = 0; team < NetworkPlayer.TeamCount; team++)
+        // Teams: one column per team for modes where players choose teams, JOIN button on top,
+        // player names below. As many columns as the largest such mode needs.
+        int columnCount = 0;
+        foreach (var mode in GameModes.All)
+            if (mode.PlayersChooseTeams) columnCount = Mathf.Max(columnCount, mode.TeamCount);
+        var teamButtons = new Button[columnCount];
+        var teamLists   = new TextMeshProUGUI[columnCount];
+        for (int team = 0; team < columnCount; team++)
         {
-            float x = team == 0 ? -200f : 200f;
+            float x = (team - (columnCount - 1) * 0.5f) * 400f; // centred columns, 400 apart
             string teamName = NetworkPlayer.TeamNames[team];
             teamButtons[team] = MakeButton($"Team{teamName}Button", waitingPanel.transform, $"JOIN {teamName}",
                                            new Vector2(x, 35), new Vector2(300, 60), NetworkPlayer.TeamColors[team]);
@@ -273,7 +277,41 @@ public class RebuildLobbyUI
             teamLists[team].enableWordWrapping = false;
         }
 
+        // Free-for-all (server-assigned teams): one list of players in their colours, in place of the columns.
+        var playerList = MakeTMP("PlayerList", waitingPanel.transform, "-", 26, white,
+                                 new Vector2(0, -10), new Vector2(600, 150), TextAlignmentOptions.Top);
+        playerList.gameObject.SetActive(false);
+
         var startGameBtn    = MakeButton("StartGameButton", waitingPanel.transform, "START GAME",  new Vector2(0, -150), new Vector2(320, 70), new Color(0.1f, 0.7f, 0.3f));
+
+        // Host-only mode picker, left of START GAME. Its "MODE" caption is a child so it hides with it.
+        var modeDropdownGO = TMP_DefaultControls.CreateDropdown(new TMP_DefaultControls.Resources());
+        modeDropdownGO.name = "ModeDropdown";
+        modeDropdownGO.transform.SetParent(waitingPanel.transform, false);
+        var mdrt = modeDropdownGO.GetComponent<RectTransform>();
+        mdrt.anchorMin = mdrt.anchorMax = mdrt.pivot = new Vector2(0.5f, 0.5f);
+        mdrt.anchoredPosition = new Vector2(-380, -150);
+        mdrt.sizeDelta = new Vector2(300, 60);
+        modeDropdownGO.GetComponent<Image>().color = grey;
+        foreach (var t in modeDropdownGO.GetComponentsInChildren<TextMeshProUGUI>(true))
+        {
+            t.font = font;
+            t.fontSize = 26;
+            t.color = Color.white;
+        }
+        foreach (var img in modeDropdownGO.transform.Find("Template").GetComponentsInChildren<Image>(true))
+            if (img.name == "Template" || img.name == "Item Background") img.color = new Color(0.18f, 0.18f, 0.24f);
+        // The default arrow is an Image with no sprite (a white square): swap it for a text arrow
+        // ("v": the lobby font has no ▼ glyph).
+        var arrow = modeDropdownGO.transform.Find("Arrow");
+        arrow.GetComponent<Image>().enabled = false;
+        var arrowText = MakeTMP("ArrowText", arrow, "v", 26, new Color(0.8f, 0.8f, 0.8f), Vector2.zero, new Vector2(30, 30));
+        arrowText.raycastTarget = false;
+        var modeDropdown = modeDropdownGO.GetComponent<TMP_Dropdown>();
+        modeDropdown.template.sizeDelta = new Vector2(0, 160);
+        var modeCaption = MakeTMP("ModeCaption", modeDropdownGO.transform, "MODE", 20, new Color(0.7f, 0.7f, 0.7f),
+                                  new Vector2(0, 50), new Vector2(300, 30));
+        modeCaption.raycastTarget = false;
         var leaveBtn        = MakeButton("LeaveButton", waitingPanel.transform, "LEAVE LOBBY",     new Vector2(0, -235), new Vector2(280, 60), red);
 
         // ── Wire LobbyUI ──────────────────────────────────────────────────────
@@ -303,6 +341,8 @@ public class RebuildLobbyUI
         so.FindProperty("_playerCountText").objectReferenceValue    = playerCountText;
         so.FindProperty("_startGameButton").objectReferenceValue    = startGameBtn;
         so.FindProperty("_leaveButton").objectReferenceValue        = leaveBtn;
+        so.FindProperty("_modeDropdown").objectReferenceValue       = modeDropdown;
+        so.FindProperty("_playerList").objectReferenceValue         = playerList;
 
         var teamButtonsProp = so.FindProperty("_teamButtons");
         var teamListsProp   = so.FindProperty("_teamLists");

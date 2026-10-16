@@ -32,13 +32,13 @@ namespace SyncRush
             GUILayout.Label("Race Finished!", title, GUILayout.Height(44f));
 
             ulong localId = NetworkManager.Singleton != null ? NetworkManager.Singleton.LocalClientId : ulong.MaxValue;
-            var placeSum = new float[NetworkPlayer.TeamCount];
-            var placeCount = new int[NetworkPlayer.TeamCount];
+            var placeSum = new float[NetworkPlayer.MaxTeams];
+            var placeCount = new int[NetworkPlayer.MaxTeams];
             for (int i = 0; i < race.FinishCount; i++)
             {
                 ulong id = race.GetFinisher(i);
                 int team = TeamOf(id);
-                if (team >= 0 && team < NetworkPlayer.TeamCount)
+                if (team >= 0 && team < NetworkPlayer.MaxTeams)
                 {
                     placeSum[team] += i + 1;
                     placeCount[team]++;
@@ -69,9 +69,16 @@ namespace SyncRush
             return NetworkPlayer.NoTeam;
         }
 
-        /// <summary>The team with the best (lowest) average place wins. Teams with no finisher don't count.</summary>
+        /// <summary>
+        /// The team with the best (lowest) average place wins. Teams with no finisher don't count.
+        /// Empty in a duel or free-for-all (every team solo): there the MVP is the winner.
+        /// </summary>
         private static string TeamResult(float[] placeSum, int[] placeCount)
         {
+            bool anyPair = false;
+            foreach (int count in placeCount) anyPair |= count > 1;
+            if (!anyPair) return string.Empty;
+
             int best = -1;
             float bestAverage = float.MaxValue;
             bool tie = false;

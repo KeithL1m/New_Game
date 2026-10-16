@@ -31,6 +31,10 @@ namespace SyncRush
         [Tooltip("Sideways spacing between players at the skip point, so they don't land on each other.")]
         [SerializeField] private float _debugSkipSpacing = 3f;
 
+        [Header("Lobby (placeholder until a real lobby scene exists)")]
+        [Tooltip("Players in the lobby stand in a row this far apart (capsule is 2.5 m wide), instead of all at the origin.")]
+        [SerializeField] private float _lobbySpacing = 4f;
+
         private CharacterController _cc;
         private Vector3 _respawnPosition;
         private bool _hasRespawnPosition;
@@ -100,7 +104,13 @@ namespace SyncRush
         private void TryPositionAtSpawn()
         {
             var registry = SpawnPointRegistry.Instance;
-            if (registry == null) return; // not in GameScene yet
+            if (registry == null)
+            {
+                // Not in GameScene yet, so in the lobby: stand side by side by client slot.
+                if (gameObject.scene.name != LobbyManager.GameSceneName)
+                    Teleport(Vector3.right * (OwnerClientId % LobbyManager.MaxPlayers) * _lobbySpacing);
+                return;
+            }
 
             _checkpointOrder.Value = -1;
             var spawn = registry.GetSpawnPoint(OwnerClientId);

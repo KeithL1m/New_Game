@@ -22,10 +22,12 @@ override code defaults, so tune them there. ⭐ = most important for the M1 gate
 | 6 | **Rope look** | `RopeVisual`: slack ×1.2 / +3 m, damping 0.985, 24 points; `Snap Width Factor` 0.6 | Too floaty, stiff or long? Is the rigid thinning look clear enough past the leash? |
 | 7 | **Aim targeting** | `Aim Angle` 25° | Easy to pick the intended player in a crowd? |
 | 8 | **Everything over real Relay** (also the M0 gate) | — | Leash and Tow both read the partner's position ~0.1 s late: any rubber-banding? Slingshot and hazards with real latency? |
-| 9 | **3-player teams** | auto-assign gives 2v1 | Design decision, not tuning: GDD says 3 players = FFA. Decide with the mode question |
+| 9 | ~~**3-player teams**~~ | Decided 2026-10-16: the host picks Teams or Free-for-all in the lobby (see "Start here" item T) | — |
 | 10 | **Course layout** | greybox (2026-09-16) | User said it doesn't fully match what they're picturing yet |
 | 11 ⭐ | **Final stretch length** | `FinalStretchZone` in `GameScene`: all of `Platform (4)`, x −287.2 → −303 (~17 m) | GDD says ~10 m (≈25 m at this scale). 17 m chosen so the snap happens on landing, not mid-air over the `Bounce (8)` gap. Long enough for shoving to matter? |
 | 12 | **Shove** | `PlayerShove`: range 5 m (centre to centre), cone 60°, force 16 m/s + 6 up, stun 0.3 s, cooldown 1.5 s | Funny or frustrating? Can you get shoved off the platform edge (intended)? **Shoving teammates** (GDD design, user unsure 2026-10-16): fun betrayal or feels wrong? |
+| 15 ⭐ | **Player vs course scale** | Player 5 m tall (`CharacterController` 5 × r1.25, Y Bot scaled 2.67); course greybox built for that | User (2026-10-16): the player looks quite small next to the course, more so with the Y Bot model. Either the player or the course needs rescaling so everything fits. See "Scale note" under "Start here" |
+| 14 | **Run animation speed** | `PlayerAnimator._runAnimSpeed` 9 m/s, blend tree Running at 7 m/s | Do the feet slide or skate when running / sprinting? |
 | 13 | **Snap look & sound** | `RopeVisual`: recoil 30 m/s (35% when slack), fade 1.5 s; `RopeSnap_TEMP.wav` (synthesized placeholder) | Does the SNAP read clearly? Replace the sound in M4 |
 
 **Name (2026-10-12):** "Sync Rush" stays the working title for now. **"Rope Rush" is the top contender for the official
@@ -39,6 +41,64 @@ bounce and hold W to land in the FinalStretchZone; **user-tested 2026-10-16: wor
 
 ---
 ## ▶ Start here next session (updated 2026-10-16)
+
+**Scale note (2026-10-16, decision pending):** the user finds the player too small for the course now that it has a
+real model (backlog row 15). A 7 m player (model + collision, ×1.4) was started and **reverted at the user's request**;
+5 m stays for testing. Either the player or the course has to change so everything fits. If the player is scaled:
+- **Fix spawns first:** spawn/respawn/skip points sit ~0.6–1.1 m above the floor, but the root pivot is the capsule
+  centre, so every spawn already starts the capsule ~2 m inside the floor and Unity pushes it out. At 7 m it would start
+  ~3 m deep, through the 2.6 m-thick floor. Fix: `PlayerRaceProgress.Teleport` should place the *feet* at the point
+  (lift by `height / 2 - center.y`).
+- Other size-tied values: `Model/YBot` local y (−height/2) and scale (height / 1.88), shove range (`_range`, touching =
+  2 × radius), camera `_distance`/`_height` on the `GameScene` camera (10 / 5.5), `CharacterController.stepOffset`.
+  Rope/leash lengths, launch and run speeds, and jump height were tuned to the 5 m player and would feel different.
+- Course alternative: scale the course down instead (gaps, gate and spinner heights, platform sizes), which keeps every
+  tuned player value. Worth deciding before M3 (procedural chunks), since chunks will be authored at one scale.
+- Unexplained: `PlayerPrefab`'s extra `CapsuleCollider` (non-trigger, alongside the `CharacterController`) is
+  height **6.41** in the working copy vs 5 in git. Not changed by Claude; user said leave it as is for testing.
+
+**C. Character: Mixamo Y Bot chosen as the default character (user, 2026-10-16). On `PlayerPrefab`, compiles, not yet
+seen in Play Mode, uncommitted.**
+- Files: `Assets/Characters/Mixamo/Y Bot.fbx` (Humanoid, own avatar), `Y Bot@Idle.fbx`, `Y Bot@Running.fbx` (Humanoid,
+  copy Y Bot's avatar, loop, root locked = in place, 30 fps). The user downloaded them; they'd landed in the project
+  root (outside `Assets/`, not imported) and were moved.
+- `PlayerPrefab/Model` is still the interpolated visual (camera, rope attach point), now scale 1 with no capsule mesh.
+  `Model/YBot`: Y Bot at the capsule's feet (local y −2.5), scale 2.67 (1.88 m → 5 m), Animator with
+  `PlayerLocomotion.controller` (1D blend tree on `Speed`: Idle 0 → Running 7 m/s) and `PlayerAnimator.cs`, which
+  sets `Speed` from the Model's measured ground speed on every peer (no networking) and plays faster above
+  `_runAnimSpeed` (9 m/s, **a guess**: the clip's natural speed reads 0 with root motion locked; tune by foot slide).
+- Collision unchanged: the 2.5 m-wide `CharacterController` capsule, wider than Y Bot. Consider a narrower radius later
+  so shoves and bumps match the visual.
+- `NetworkPlayer` team colour now tints the body renderers under `Model` (Y Bot's `Alpha_Surface`), not `Alpha_Joints`.
+- `Assets/Scenes/CharacterTest.unity` + `Assets/Characters/Mixamo/Preview/*.controller`: preview scene (capsule vs idle
+  vs running Y Bot). Can be deleted once the character is settled.
+- Known: no jump/fall animation yet (runs or idles in the air); a moving platform's carry counts as running.
+Test (restart the MPPM VP, the prefab changed): Y Bot in team colour, idles standing still, runs when moving, faster
+when sprinting, feet on the ground, rope still attaches around the hips, camera unchanged.
+**Next: ragdoll (`RagdollController`, GDD §5.2) on this skeleton, then Pull (Recover).**
+
+**T. Game modes: host picks the mode in the lobby (user design 2026-10-16, replacing the same day's automatic
+"3 players = FFA via a GREEN team" version). Compiles, `LobbyScene` regenerated, untested in play, uncommitted.**
+- `GameMode.cs`: `GameModeId` + `GameModes.All`, one entry per mode (name, team count, max team size, whether players
+  choose teams). **Add a future mode by adding an entry.** `GameModes.Current` resets to the default (Teams) for each
+  new lobby; not remembered after a race (agreed for now).
+  - **Teams:** BLUE vs RED, max 2 each, auto-balanced, JOIN buttons to switch. 4 = 2v2, 3 = 2v1, 2 = 1v1 or partners.
+  - **Free-for-all:** every player on their own team (colours BLUE/RED/GREEN/YELLOW), no JOIN buttons.
+- Host: **Mode dropdown** left of START GAME (`LobbyManager.SetMode`, lobby only). Changing the mode reassigns every
+  team (`NetworkPlayer.ReassignAllTeams`). The mode rides in the existing player-count named message, so clients
+  (including late joiners) get it with the count. Everyone sees it after the count, e.g. "Players: 3 / 4 · Teams · 2v1".
+- Game code never reads the mode, only teams (`Partner` / `IsTeammateOf`): FFA = all solo, so no partner rope, leash
+  or Tow, and the results popup skips the team line.
+- `NetworkPlayer.MaxTeams` 4 (was `TeamCount`). `LobbyUI`: team columns shown only in modes where players choose
+  teams, otherwise `PlayerList` (players in their colours). `RebuildLobbyUI`: 2 columns, dropdown (text "v" arrow,
+  the lobby font has no ▼), `PlayerList`.
+- Lobby placeholder (2026-10-16, untested): players stand in a row 4 m apart by client slot
+  (`PlayerRaceProgress._lobbySpacing`, `OwnerClientId % 4`) instead of all at the origin. Until a real lobby scene.
+- Gotcha: the Editor marks `LobbyScene` dirty after every script reload with no real change (a saved copy was
+  byte-identical to disk), so a "LobbyScene has unsaved changes" prompt is usually not real work.
+Test (host + 2 VPs): default "Teams", columns shown, 3 players → 2v1; host switches to Free-for-all → columns hide,
+coloured list, 3 different capsule/Y Bot colours; back to Teams → re-balanced; clients have no dropdown but see the
+mode; in game, FFA players have no partner rope and the results show no team line.
 
 **F. Final stretch built 2026-10-16 (GDD §5.6). ✅ All 6 test steps passed (user, host + MPPM, 2026-10-16). Uncommitted.** Feel still to judge with a real friend (backlog rows 11–13).
 - `RaceState.FinalStretch` (between `Racing` and `Results`). **Global**: the first player into `FinalStretchZone`
@@ -196,8 +256,7 @@ physics together, since they depend on each other (an always-visible rope needs 
 - **Tow**, the second rope move (recommended): the player in front pulls a trailing partner along with part of the leader's speed. It does more for the M1 question "is the tether fun?".
 - **Rope physics**: a simulated, visual-only rope (verlet points) that swings, whips on launch, and lies on the ground. The current rope is a fixed curve driven by tension, not physics. Polish, which could also wait for M4.
 
-**3. Decision blocking ragdoll + Pull (Recover):** which character to ragdoll, a placeholder made from primitives or
-a real rigged humanoid to keep (e.g. Mixamo, or Coplay auto-rig). The GDD wants one skeleton for both animation and ragdoll.
+**3. ~~Decision blocking ragdoll + Pull (Recover)~~:** decided 2026-10-16: Mixamo Y Bot (see "Start here" item C).
 
 **4. Still deferred:**
 - **Two-machine Relay test** (no second machine yet). It's also needed for the M1 kill gate: playtest the tether with a real friend.
@@ -229,7 +288,7 @@ if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is 
 | Owner-simulated movement (`CharacterController`) | ✅ Implemented, GDD values wired in Inspector | `Assets/Scripts/SyncRushPlayerController.cs` — base 7 m/s, sprint 10 m/s, air control 0.4, jump 1.8 m, coyote 0.12 s, stamina drain/recover |
 | `PlayerInputReader` snapshot | ✅ Implemented | `Assets/Scripts/PlayerInputReader.cs`, `Assets/Scripts/InputSystem_Actions.cs` |
 | Camera controller | ✅ Implemented, reworked 2026-09-23 | `Assets/Scripts/PlayerCameraController.cs` — mouse X yaws the player, mouse/stick Y now pitches the camera (see 2026-09-23 section) |
-| `PlayerRegistry` / team ID / placement / dart count | 🟨 Team ID implemented 2026-10-12, untested; placement/darts not yet | `Assets/Scripts/NetworkPlayer.cs` on `PlayerPrefab` (replaces the Multiplayer Center sample `SetColorBasedOnOwnerId` on `Model`, which coloured capsules randomly by client ID). A server-written `TeamId` NetworkVariable: two teams, BLUE (0) and RED (1), max 2 each. **Rules agreed with the user:** the server auto-assigns each joiner to the smaller team; in the lobby, JOIN BLUE / JOIN RED buttons ask the server to switch (`RequestTeamRpc`, refused if full); teams lock once in `GameScene`. Capsules take the team colour. Code asks only `Partner` / `IsTeammateOf`, never fixed team numbers, so a later free-for-all can put each player on their own team. **Open:** with 3 players auto-assign makes 2v1 and the buttons allow it, though GDD §5.4 says 3 players = FFA. Buttons stay on at every count for now so 2 players on one machine can test as partners. Revisit with the mode decision |
+| `PlayerRegistry` / team ID / placement / dart count | 🟨 Team ID implemented 2026-10-12, untested; placement/darts not yet | `Assets/Scripts/NetworkPlayer.cs` on `PlayerPrefab` (replaces the Multiplayer Center sample `SetColorBasedOnOwnerId` on `Model`, which coloured capsules randomly by client ID). A server-written `TeamId` NetworkVariable: two teams, BLUE (0) and RED (1), max 2 each. **Rules agreed with the user:** the server auto-assigns each joiner to the smaller team; in the lobby, JOIN BLUE / JOIN RED buttons ask the server to switch (`RequestTeamRpc`, refused if full); teams lock once in `GameScene`. Capsules take the team colour. Code asks only `Partner` / `IsTeammateOf`, never fixed team numbers, so a later free-for-all can put each player on their own team. **Modes (2026-10-16):** the host picks Teams or Free-for-all in the lobby (`GameModes`, see "Start here" item T). Buttons stay on at every count so 2 players on one machine can still test as partners |
 | `SpawnPointRegistry` | ⬜ Not yet | |
 
 ## M0 systems (GDD §7.2, this milestone's slice)

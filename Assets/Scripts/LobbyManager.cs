@@ -50,7 +50,8 @@ namespace SyncRush
         // leaving. So ConnectedClientIds is only ever accurate on the server
         // (host). PlayerCount is instead pushed to every peer explicitly via a
         // named message whenever the server's roster changes, so it stays
-        // correct on joining clients too.
+        // correct on joining clients too. The host's chosen game mode rides in
+        // the same message, so a client always learns both together.
         private const string PlayerCountMessageName = "SyncRush_PlayerCount";
 
         // ── State ─────────────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ namespace SyncRush
                 Transport.SetRelayServerData(allocation.ToRelayServerData(RelayConnectionType));
                 CurrentCode = NormaliseCode(code);
                 IsHost = true;
+                GameModes.SetCurrent(GameModes.Default.Id); // each new lobby starts in the default mode
 
                 SubscribeToNetworkManager();
                 if (!NetworkManager.Singleton.StartHost())
@@ -242,6 +244,23 @@ namespace SyncRush
         }
 
         /// <summary>
+        /// Host-only, lobby only: switch game mode. Reassigns every player's team to fit the new
+        /// mode and pushes the mode to every peer.
+        /// </summary>
+        public void SetMode(GameModeId id)
+        {
+            var nm = NetworkManager.Singleton;
+            if (!IsHost || nm == null || !nm.IsServer) return;
+            if (SceneManager.GetActiveScene().name != LobbySceneName) return;
+            if (GameModes.Current.Id == id) return;
+
+            GameModes.SetCurrent(id);
+            NetworkPlayer.ReassignAllTeams();
+            BroadcastPlayerCount();
+            Debug.Log($"[LobbyManager] Game mode set to {GameModes.Current.DisplayName}.");
+        }
+
+        /// <summary>
         /// Host-only: load the GameScene for all connected clients.
         /// NGO's NetworkSceneManager synchronises the load across all peers.
         /// </summary>
@@ -276,6 +295,7 @@ namespace SyncRush
             CurrentCode = string.Empty;
             IsHost = false;
             ConnectedClientIds.Clear();
+            GameModes.SetCurrent(GameModes.Default.Id);
             OnSessionEnded?.Invoke();
 
             // Return to lobby scene locally
@@ -420,14 +440,17 @@ namespace SyncRush
             OnPlayerCountChanged?.Invoke(PlayerCount);
 
             if (nm.CustomMessagingManager == null) return;
-            using var writer = new FastBufferWriter(sizeof(int), Unity.Collections.Allocator.Temp);
+            using var writer = new FastBufferWriter(sizeof(int) + sizeof(byte), Unity.Collections.Allocator.Temp);
             writer.WriteValueSafe(PlayerCount);
+            writer.WriteValueSafe((byte)GameModes.Current.Id);
             nm.CustomMessagingManager.SendNamedMessageToAll(PlayerCountMessageName, writer);
         }
 
         private void HandlePlayerCountMessage(ulong senderClientId, FastBufferReader reader)
         {
             reader.ReadValueSafe(out int count);
+            reader.ReadValueSafe(out byte mode);
+            GameModes.SetCurrent((GameModeId)mode);
             PlayerCount = count;
             OnPlayerCountChanged?.Invoke(count);
         }

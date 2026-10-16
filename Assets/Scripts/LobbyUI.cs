@@ -1,3 +1,4 @@
+using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -21,8 +22,10 @@ namespace SyncRush
     ///   - Clients see "Waiting for host to start..." — no start button.
     ///   - Both see a "LEAVE" button, and a "COPY" button that puts the code on the clipboard
     ///     so it can be pasted to friends.
-    ///   - Both see one column per team with a JOIN button and the team's players. Joining
-    ///     players are auto-assigned (NetworkPlayer); the buttons let them switch if there's room.
+    ///   - Host sees a Mode dropdown (GameModes.All); everyone sees the mode after the player count.
+    ///   - In a mode where players choose teams (Teams), one column per team with a JOIN button and
+    ///     the team's players. Joining players are auto-assigned (NetworkPlayer); the buttons let
+    ///     them switch if there's room. Otherwise (Free-for-all) a single list of players in their colour.
     ///
     /// Scene separation:
     ///   This canvas lives in LobbyScene only. GameScene has no lobby UI.
@@ -64,10 +67,14 @@ namespace SyncRush
         [SerializeField] private Button _startGameButton;   // host-only
         [SerializeField] private Button _leaveButton;
 
-        [Header("Teams")]
-        [Tooltip("Index = team id (0 blue, 1 red).")]
+        [Header("Mode & teams")]
+        [Tooltip("Host only: picks GameModes.All[index].")]
+        [SerializeField] private TMP_Dropdown _modeDropdown;
+        [Tooltip("Index = team id (0 blue, 1 red). Shown in modes where players choose teams.")]
         [SerializeField] private Button[] _teamButtons;
         [SerializeField] private TextMeshProUGUI[] _teamLists;
+        [Tooltip("Shown instead of the team columns in modes where the server assigns teams (Free-for-all).")]
+        [SerializeField] private TextMeshProUGUI _playerList;
 
         private TextMeshProUGUI _startHostLabel;
         private TextMeshProUGUI _joinConfirmLabel;
@@ -117,6 +124,10 @@ namespace SyncRush
                 int team = i;
                 _teamButtons[i].onClick.AddListener(() => NetworkPlayer.Local?.RequestTeam(team));
             }
+
+            _modeDropdown.ClearOptions();
+            _modeDropdown.AddOptions(System.Array.ConvertAll(GameModes.All, m => m.DisplayName).ToList());
+            _modeDropdown.onValueChanged.AddListener(i => LobbyManager.Instance.SetMode(GameModes.All[i].Id));
         }
 
         // Unity doesn't order Awake/OnEnable across objects, so LobbyUI.OnEnable can run before
@@ -129,6 +140,7 @@ namespace SyncRush
         {
             Subscribe();
             NetworkPlayer.OnRosterChanged += RefreshTeams;
+            GameModes.OnChanged += RefreshTeams;
         }
 
         private void Start()
@@ -156,6 +168,7 @@ namespace SyncRush
         private void OnDisable()
         {
             NetworkPlayer.OnRosterChanged -= RefreshTeams;
+            GameModes.OnChanged -= RefreshTeams;
 
             var lm = _subscribedTo;
             if (lm == null) return;
@@ -245,8 +258,9 @@ namespace SyncRush
             _waitingCodeDisplay.text = $"Your Code: <b>{code}</b>";
             _waitingStatusText.text  = "Waiting for players...";
             UpdatePlayerCount();
-            // Host sees Start Game button, clients do not
+            // Host sees Start Game button and picks the mode, clients do not
             _startGameButton.gameObject.SetActive(true);
+            _modeDropdown.gameObject.SetActive(true);
             ShowWaitingPanel();
         }
 
@@ -256,8 +270,9 @@ namespace SyncRush
             _waitingCodeDisplay.text = $"Code: <b>{LobbyManager.Instance.CurrentCode}</b>";
             _waitingStatusText.text  = "Waiting for host to start...";
             UpdatePlayerCount();
-            // Clients never see the Start Game button
+            // Clients never see the Start Game button or the mode picker
             _startGameButton.gameObject.SetActive(false);
+            _modeDropdown.gameObject.SetActive(false);
             ShowWaitingPanel();
         }
 
@@ -328,18 +343,47 @@ namespace SyncRush
         private void UpdatePlayerCount()
         {
             int count = LobbyManager.Instance.PlayerCount;
-            _playerCountText.text = $"Players: {count} / {LobbyManager.MaxPlayers}";
+            _playerCountText.text = $"Players: {count} / {LobbyManager.MaxPlayers}  ·  {NetworkPlayer.ModeLabel}";
         }
 
         /// <summary>
-        /// Lists each team's players and enables a team's JOIN button only if this player could
-        /// switch to it (not already on it, and it has room). The server re-checks on request.
+        /// Shows the current mode's lobby: team columns with JOIN buttons if players choose teams
+        /// (a JOIN button is enabled only if this player could switch: not already on it, and it
+        /// has room; the server re-checks), otherwise one list of players in their colours. Also
+        /// syncs the host's dropdown and the mode shown next to the player count.
         /// </summary>
         private void RefreshTeams()
         {
+            if (LobbyManager.Instance != null) UpdatePlayerCount();
+
+            var mode = GameModes.Current;
+            _modeDropdown.SetValueWithoutNotify(System.Array.IndexOf(GameModes.All, mode));
+
+            bool columns = mode.PlayersChooseTeams;
+            _playerList.gameObject.SetActive(!columns);
+            for (int team = 0; team < _teamButtons.Length; team++)
+            {
+                bool show = columns && team < mode.TeamCount;
+                _teamButtons[team].gameObject.SetActive(show);
+                if (team < _teamLists.Length) _teamLists[team].gameObject.SetActive(show);
+            }
+
             var local = NetworkPlayer.Local;
+            if (!columns)
+            {
+                var list = new System.Text.StringBuilder();
+                foreach (var p in NetworkPlayer.All)
+                {
+                    if (p.TeamId < 0 || p.TeamId >= NetworkPlayer.TeamColors.Length) continue;
+                    string hex = ColorUtility.ToHtmlStringRGB(NetworkPlayer.TeamColors[p.TeamId]);
+                    list.Append($"<color=#{hex}>{p.DisplayName}{(p == local ? " (you)" : "")}</color>\n");
+                }
+                _playerList.text = list.Length > 0 ? list.ToString().TrimEnd() : "-";
+                return;
+            }
+
             var names = new System.Text.StringBuilder();
-            for (int team = 0; team < _teamLists.Length && team < NetworkPlayer.TeamCount; team++)
+            for (int team = 0; team < _teamLists.Length && team < mode.TeamCount; team++)
             {
                 names.Clear();
                 foreach (var p in NetworkPlayer.All)
@@ -353,7 +397,7 @@ namespace SyncRush
 
                 if (team >= _teamButtons.Length) continue;
                 bool onTeam = local != null && local.TeamId == team;
-                bool full = NetworkPlayer.CountOnTeam(team) >= NetworkPlayer.MaxTeamSize;
+                bool full = NetworkPlayer.CountOnTeam(team) >= mode.MaxTeamSize;
                 _teamButtons[team].interactable = local != null && !onTeam && !full;
 
                 var label = _teamButtons[team].GetComponentInChildren<TextMeshProUGUI>();
