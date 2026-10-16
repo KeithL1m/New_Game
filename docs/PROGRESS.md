@@ -3,9 +3,8 @@
 Tracks implementation status against [GDD.md](GDD.md). Update this file whenever a
 GDD system is added, changed, or a milestone gate is crossed — don't let it drift.
 
-Last verified against repo: **2026-10-12** (end of session), on top of pushed commit `35a45d8`, plus uncommitted work
-the user is committing: the simulated rope (`RopeVisual.cs` + `.meta`, new files), the rigid "tense" look, the
-heavy-drag leash, and this file. The Editor reports no compile errors.
+Last verified against repo: **2026-10-16**, on top of commit `ed19631` (all 2026-10-12 work is committed), plus
+uncommitted final-stretch work (see "Start here" item F). The Editor reports no compile errors.
 
 ---
 ## 🎯 Playtest & tuning backlog (things to judge by feel, ideally with a real friend)
@@ -25,16 +24,61 @@ override code defaults, so tune them there. ⭐ = most important for the M1 gate
 | 8 | **Everything over real Relay** (also the M0 gate) | — | Leash and Tow both read the partner's position ~0.1 s late: any rubber-banding? Slingshot and hazards with real latency? |
 | 9 | **3-player teams** | auto-assign gives 2v1 | Design decision, not tuning: GDD says 3 players = FFA. Decide with the mode question |
 | 10 | **Course layout** | greybox (2026-09-16) | User said it doesn't fully match what they're picturing yet |
+| 11 ⭐ | **Final stretch length** | `FinalStretchZone` in `GameScene`: all of `Platform (4)`, x −287.2 → −303 (~17 m) | GDD says ~10 m (≈25 m at this scale). 17 m chosen so the snap happens on landing, not mid-air over the `Bounce (8)` gap. Long enough for shoving to matter? |
+| 12 | **Shove** | `PlayerShove`: range 5 m (centre to centre), cone 60°, force 16 m/s + 6 up, stun 0.3 s, cooldown 1.5 s | Funny or frustrating? Can you get shoved off the platform edge (intended)? **Shoving teammates** (GDD design, user unsure 2026-10-16): fun betrayal or feels wrong? |
+| 13 | **Snap look & sound** | `RopeVisual`: recoil 30 m/s (35% when slack), fade 1.5 s; `RopeSnap_TEMP.wav` (synthesized placeholder) | Does the SNAP read clearly? Replace the sound in M4 |
 
 **Name (2026-10-12):** "Sync Rush" stays the working title for now. **"Rope Rush" is the top contender for the official
 name** (no Steam game with that name, per the user's check); "Strung Along" is the runner-up. Before deciding, also
 check the app stores and trademarks. The code namespace `SyncRush` can stay internal after a rename.
 
-**Debug left on, to remove later:** `[PushDebug]` logging (`SyncRushPlayerController._debugLogPushes`) and F8
-auto-run (`_debugAutoRun`). Keep F8 until two-machine testing exists.
+**Debug left on, to remove later:** `[PushDebug]` logging (`SyncRushPlayerController._debugLogPushes`), F8
+auto-run (`_debugAutoRun`), and F9 skip-to-end (`PlayerRaceProgress`, added 2026-10-16: moves **every** player onto
+the last bounce pad `Bounce (8)`, marks all checkpoints before Finish as passed and makes the pad the respawn point;
+bounce and hold W to land in the FinalStretchZone; **user-tested 2026-10-16: works well**). Keep F8/F9 until two-machine testing exists.
 
 ---
-## ▶ Start here next session (updated 2026-10-12)
+## ▶ Start here next session (updated 2026-10-16)
+
+**F. Final stretch built 2026-10-16 (GDD §5.6). ✅ All 6 test steps passed (user, host + MPPM, 2026-10-16). Uncommitted.** Feel still to judge with a real friend (backlog rows 11–13).
+- `RaceState.FinalStretch` (between `Racing` and `Results`). **Global**: the first player into `FinalStretchZone`
+  starts it for everyone (user decision 2026-10-16). Reported like a finish: owner trigger → `PlayerRaceProgress`
+  ServerRpc → `RaceStateMachine.ReportFinalStretch`. Finishes are accepted during `FinalStretch`.
+  `RaceStateMachine.RopesCut` is true from `FinalStretch` on.
+- `FinalStretchZone.cs`: trigger placed in `GameScene` over the whole last platform (`Platform (4)`), backlog row 11.
+- `PlayerTether`: once ropes are cut, any Slingshot/Tow ends (an anchored Slingshot does **not** fire), no new move
+  starts, leash and Tow pull are off, its HUD hides. Every peer snaps its ropes locally (`SnapRope`), nothing new is
+  networked. The rival rope remembers its last target so it can still snap if the Idle state arrives first.
+- `RopeVisual.Snap/TickSnapped/Restore`: breaks at the middle, each half recoils toward its player (harder when
+  taut), falls and fades over 1.5 s. The second half is a separate `LineRenderer` (`SnappedHalf`), since one line
+  can't draw a gap. `Restore` re-joins when a new race starts. Edit-mode sim checked the split, finite values and
+  restore; the fade can't advance in Edit Mode, so check it in play.
+- Snap sound: `Assets/Audio/RopeSnap_TEMP.wav`, **synthesized in Python as a placeholder** because Coplay
+  `generate_sfx` returned `401 Unauthorized` (check the Coplay account if a generated one is wanted). Played via a
+  mostly-2D `AudioSource` (spatial 0.3) on the player, because a fully 3D one-shot at the rope's middle was near
+  silent. Assigned on `PlayerPrefab` → `PlayerTether._snapSound`.
+- `PlayerShove.cs` (new NetworkBehaviour on `PlayerPrefab`, so **restart the MPPM virtual player**): LMB after the
+  ropes are cut (uses the previously unused `OnAttackPressed`) shoves the nearest player in a 60° cone within 5 m,
+  teammates included. Knockback sent to the target's owner (`ShoveRpc`), same path as the Slingshot launch. HUD:
+  "ROPES CUT!" banner for 2.5 s, then a shove cooldown bar.
+- `RaceResultsPopup`: MVP tag on 1st place, rows in team colours, and the team result: best **average** place
+  (same as combined places in 2v2, but fair in a 2v1), or "TEAMS DRAW".
+- **Not done:** music cut (there's no music yet, M4). The Tow 54 m break was planned to reuse the snap, but dropped:
+  the always-on partner rope just goes slack there, so a snap followed by the rope reappearing would look wrong.
+- Saving the prefab also serialized the leash fields for the first time; values are the code defaults the user
+  tested (36 / 0.5 / 4 / 1 / 3).
+**User test 2026-10-16:** rope snap ✅, snap SFX on time ✅, Tow/Slingshot disabled after the snap ✅, Shove works on
+teammates and rivals ✅. Later the same day: steps 2 (move in progress cancels), 5 (results popup) and 6 (rival rope snap) ✅.
+The user questioned shoving teammates ("isn't that a bit contradicting?"). It's by design (GDD pillar 3 "every round
+ends in a betrayal", and the §5.6 MVP/team scoring split exists to reward it). Kept for now; judge with a real friend
+(backlog row 12). Fallbacks if it feels bad: rivals only, or a weaker teammate shove.
+Test (host + 1 VP, **same team**, VP restarted; press F9 to skip to the end, ✅ confirmed working 2026-10-16):
+1. Race to the last platform: banner shows, both ropes snap on **both** screens with the sound, halves fade out.
+2. Hold RMB (Tow) or LMB (Slingshot anchor) just before landing on the last platform: it ends cleanly, no launch.
+3. After the snap: LMB and RMB start no rope move; walking away from your partner isn't slowed or dragged.
+4. LMB near the VP: they're knocked back on their screen; cooldown bar on yours. LMB with nobody near: nothing.
+5. Both finish: popup shows MVP and "BLUE/RED TEAM WINS" (or a draw on the same team).
+6. Different teams: a Slingshot anchored on the rival at the moment of the snap also snaps.
 
 **0. Heavy-drag leash implemented 2026-10-12. User tested it on one machine and said it "feels good now" (uncommitted at session end).** Leash length is still to be found by playtesting (backlog row 1). It's the parked "soft leash" idea in a
 stronger form; the user chose it as better for the concept (cooperation enforced, and it gives the final-stretch snap
@@ -169,7 +213,7 @@ if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is 
 | # | Deliverable | Status | Notes |
 |---|---|---|---|
 | **M0** | Race state machine, checkpoints, placement, greybox straight course | 🟨 In progress | Greybox straight course built by hand in ProBuilder (`GameScene`: `Platform`, `Starting`/`Checkpoint`/`Finish` pole gates, `Deathzone`). `RaceStateMachine`, `RaceCheckpoint`, `PlayerRaceProgress`, `DeathZone`, `SpawnPointRegistry` written and wired onto those objects. **2026-09-04:** first real two-client test (host + Multiplayer Play Mode virtual player) — host/join/countdown/GO all fired correctly and remote player movement replicated well on both sides. Since then, every M0 system has been verified with host + MPPM on one machine. The only M0 item left is the two-machine Relay test, deferred 2026-10-07 because no second machine is available |
-| **M1** | Tether + ragdoll-on-impact, 4 players over Relay | 🟨 In progress | Slingshot tether works on one machine (user playtest 2026-10-07, see M1 section). Tow works on one machine (2026-10-12), feel deferred to a live test. Teams (2026-10-12, user-tested) and the always-on simulated partner rope (2026-10-12, untested) are built. Not built yet: ragdoll (needs a rigged character, choice still open), Recover, final-stretch rope snap |
+| **M1** | Tether + ragdoll-on-impact, 4 players over Relay | 🟨 In progress | Slingshot tether works on one machine (user playtest 2026-10-07, see M1 section). Tow works on one machine (2026-10-12), feel deferred to a live test. Teams (2026-10-12, user-tested), the always-on simulated partner rope and the heavy-drag leash are built. Final stretch (rope SNAP, Shove, MVP/team result) built and user-tested on one machine 2026-10-16. Not built yet: ragdoll (needs a rigged character, choice still open), Recover |
 | **M2** | Darts, status effects, ammo economy | ⬜ Not started | |
 | **M3** | Course generator, 15 chunks | ⬜ Not started | |
 | **M4** | Presentation pass | ⬜ Not started | |
@@ -192,7 +236,7 @@ if Start Lobby says "Something went wrong connecting". `[PushDebug]` logging is 
 
 | System | Status | Where |
 |---|---|---|
-| `RaceStateMachine` | ✅ Verified on one machine, host + MPPM (user-reported, by 2026-10-07) | Full `Racing → Results` run with every player finishing reported working. | `Assets/Scripts/RaceStateMachine.cs` — server-authoritative `WaitingToStart → Countdown → Racing → Results`. `FinalStretch` deliberately omitted until M1's tether exists to sever (GDD §5.6) |
+| `RaceStateMachine` | ✅ Verified on one machine, host + MPPM (user-reported, by 2026-10-07) | Full `Racing → Results` run with every player finishing reported working. | `Assets/Scripts/RaceStateMachine.cs` — server-authoritative `WaitingToStart → Countdown → Racing → FinalStretch → Results`. `FinalStretch` added 2026-10-16 (see "Start here" item F) |
 | `RaceCheckpoint` | ✅ Verified, host + MPPM virtual client (2026-09-23) | `Assets/Scripts/RaceCheckpoint.cs` — trigger gate with `Kind`/`Order`; gates in `GameScene` run `Starting`(0) → `Checkpoint`(1) → `Checkpoint2`(2) → `Finish`(3). `Checkpoint3`–`Checkpoint6` were removed in `8b23a84` (duplicates); `Finish` was left at order 7, so finishing was silently rejected by the anti-shortcut check until it was renumbered to 3 on 2026-10-02. Crossing in order confirmed normal. **Not tried over a real remote connection** (Multiplayer Play Mode's virtual client is same-machine, no real network latency) |
 | `PlayerRaceProgress` | ✅ Verified on one machine, host + MPPM (user-reported, by 2026-10-07) | `Assets/Scripts/PlayerRaceProgress.cs`, added to `PlayerPrefab` — owner-writable checkpoint order (anti-shortcut: rejects out-of-sequence crossings), spawn/respawn placement, reports finish to `RaceStateMachine` via ServerRpc. The user reports the out-of-order rejection working when tested deliberately |
 | `DeathZone` | ✅ Verified single-player and non-host client via MPPM (2026-09-23) | `Assets/Scripts/DeathZone.cs`, attached to `Deathzone` (now a trigger) — respawns the player at their last checkpoint. Confirmed for the non-host client using the Multiplayer Play Mode virtual client. **Not confirmed over an actual remote/online connection** — MPPM's virtual client shares the host's machine, so real latency/replication timing hasn't been exercised |

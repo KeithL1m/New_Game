@@ -10,13 +10,14 @@ namespace SyncRush
         WaitingToStart,
         Countdown,
         Racing,
-        // FinalStretch belongs here once the tether system (M1) exists to sever
-        // tethers in the last ~10m of the course (GDD §5.6) — not wired up yet.
+        // GDD §5.6: the first player into the FinalStretchZone severs every tether and
+        // unlocks Shove for the rest of the race. Players can still finish from here.
+        FinalStretch,
         Results
     }
 
     /// <summary>
-    /// M0 race flow: WaitingToStart -> Countdown -> Racing -> Results.
+    /// Race flow: WaitingToStart -> Countdown -> Racing -> FinalStretch -> Results.
     /// Server-authoritative (GDD §7.3: placement/checkpoints are server-owned).
     /// One instance per GameScene load, placed on a NetworkObject in the scene.
     /// </summary>
@@ -35,6 +36,9 @@ namespace SyncRush
         private readonly NetworkList<ulong> _finishOrder = new();
 
         public RaceState State => _state.Value;
+
+        /// <summary>True from the final stretch on: ropes are cut and Shove is available (GDD §5.6).</summary>
+        public bool RopesCut => _state.Value >= RaceState.FinalStretch;
 
         /// <summary>Number of players who have crossed the Finish so far (synced to all clients).</summary>
         public int FinishCount => _finishOrder.Count;
@@ -81,10 +85,22 @@ namespace SyncRush
             Debug.Log("[RaceStateMachine] GO.");
         }
 
+        /// <summary>
+        /// Server-only: a player entered the FinalStretchZone. The first report of the race starts
+        /// the final stretch for everyone (one global moment, user decision 2026-10-16).
+        /// </summary>
+        public void ReportFinalStretch(ulong clientId)
+        {
+            if (!IsServer || _state.Value != RaceState.Racing) return;
+
+            _state.Value = RaceState.FinalStretch;
+            Debug.Log($"[RaceStateMachine] Final stretch started by client {clientId}.");
+        }
+
         /// <summary>Server-only: called when a player's PlayerRaceProgress crosses the Finish checkpoint.</summary>
         public void ReportFinish(ulong clientId)
         {
-            if (!IsServer || _state.Value != RaceState.Racing) return;
+            if (!IsServer || (_state.Value != RaceState.Racing && _state.Value != RaceState.FinalStretch)) return;
             if (_finishOrder.Contains(clientId)) return;
 
             _finishOrder.Add(clientId);

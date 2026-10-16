@@ -17,6 +17,7 @@ GameObject:
   - component: {fileID: 6255552780534007852}
   - component: {fileID: 952393235015384072}
   - component: {fileID: 1949581178165433476}
+  - component: {fileID: 2364439093370373028}
   m_Layer: 0
   m_Name: PlayerPrefab
   m_TagString: Untagged
@@ -193,6 +194,8 @@ MonoBehaviour:
   InputLocked: 0
   SpeedMultiplier: 1
   TowVelocity: {x: 0, y: 0, z: 0}
+  LeashAwayDir: {x: 0, y: 0, z: 0}
+  LeashAwayFactor: 1
   _debugLogPushes: 1
 --- !u!114 &6255552780534007852
 MonoBehaviour:
@@ -236,18 +239,23 @@ MonoBehaviour:
   _towLeaderSpeedMultiplier: 0.85
   _trailSpacing: 1
   _trailReachRadius: 2
+  _leashLength: 36
+  _leashAwaySpeedFactor: 0.5
+  _leashRampDistance: 4
+  _leashDragFactor: 1
+  _leashRespawnGrace: 3
   _aimAngle: 25
   _previewRangeFactor: 2
   _ropeMaterial: {fileID: 2100000, guid: 820a9fa3f9e11164e8c529a5910f533d, type: 2}
   _slackColor: {r: 0, g: 0, b: 0, a: 1}
   _tautColor: {r: 1, g: 0, b: 0, a: 1}
   _ropeWidth: 0.2
-  _strainedRopeWidth: 0.35
+  _snapWidthFactor: 0.6
   _previewWidth: 0.15
   _ropeSegments: 24
-  _strainShake: 1
-  _strainShakeSpeed: 40
   _snapColor: {r: 0.35, g: 0, b: 0, a: 1}
+  _snapSound: {fileID: 8300000, guid: 16837fab24989d040a07fc6a255b3ac5, type: 3}
+  _snapVolume: 1
 --- !u!114 &1949581178165433476
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -261,6 +269,26 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SyncRush.NetworkPlayer
   ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &2364439093370373028
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7634273746890508597}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b2571768b68c1a643990e81a6ea7a642, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SyncRush.PlayerShove
+  ShowTopMostFoldoutHeaderGroup: 1
+  _range: 5
+  _coneAngle: 60
+  _force: 16
+  _lift: 6
+  _stunTime: 0.3
+  _cooldown: 1.5
+  _bannerTime: 2.5
 --- !u!1 &7634273746890508598
 GameObject:
   m_ObjectHideFlags: 0

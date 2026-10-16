@@ -33,6 +33,10 @@ namespace SyncRush
     /// slowed and the partner is dragged after you. See UpdatePartnerPull. A Slingshot
     /// on a rival gets its own rope while anchored.
     ///
+    /// Final stretch (GDD §5.6): once RaceStateMachine.RopesCut, every rope snaps on every peer
+    /// (RopeVisual.Snap, plus _snapSound), any Slingshot or Tow in progress ends without firing,
+    /// no new move can start, and the leash and Tow pull are off. Shove (PlayerShove) takes over LMB.
+    ///
     /// Recover comes later in M1. A player can be in only one rope at a time: nobody can hook a
     /// player who is anchoring, towing, or already on someone else's rope.
     /// </summary>
@@ -146,6 +150,12 @@ namespace SyncRush
         [Tooltip("Colour the rope darkens toward as it nears the snap point.")]
         [SerializeField] private Color _snapColor = new(0.35f, 0f, 0f);
 
+        [Tooltip("Played at the middle of each rope as it snaps at the final stretch (TEMP placeholder SFX).")]
+        [SerializeField] private AudioClip _snapSound;
+
+        [Range(0f, 1f)]
+        [SerializeField] private float _snapVolume = 1f;
+
         // Owner-written contract state; every peer reads it to draw the rope.
         private readonly NetworkVariable<TetherState> _state =
             new(TetherState.Idle, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
@@ -170,6 +180,12 @@ namespace SyncRush
         private LineRenderer _previewLine;
         private RopeVisual _partnerRope; // drawn by the lower-id teammate of each pair
         private RopeVisual _rivalRope;   // this player's Slingshot on a non-teammate
+        // Last rival the rival rope was drawn to, and its tension, so it can still snap after the
+        // contract has ended (the Idle state may replicate before the race state does).
+        private PlayerTether _rivalRopeTarget;
+        private float _rivalRopeTension;
+        // Mostly 2D: a fully 3D one-shot at the rope's middle was near silent at rope distances.
+        private AudioSource _snapAudio;
 
         // Owner only: partner NetworkObjectId → Time.time when they can be slingshot again.
         private readonly Dictionary<ulong, float> _nextAllowedTime = new();
@@ -208,6 +224,10 @@ namespace SyncRush
             _previewLine.useWorldSpace = true;
             _previewLine.material = ropeMaterial;
             _previewLine.enabled = false;
+
+            _snapAudio = gameObject.AddComponent<AudioSource>();
+            _snapAudio.playOnAwake = false;
+            _snapAudio.spatialBlend = 0.3f;
         }
 
         public override void OnNetworkSpawn()
@@ -239,8 +259,11 @@ namespace SyncRush
         // ── Owner: contract ───────────────────────────────────────────────────
 
         private bool CanStartContract =>
-            _state.Value == TetherState.Idle && FindHolder() == null
+            _state.Value == TetherState.Idle && FindHolder() == null && !RopesCut
             && gameObject.scene.name == LobbyManager.GameSceneName;
+
+        /// <summary>Final stretch or later: all ropes are cut (GDD §5.6).</summary>
+        private static bool RopesCut => RaceStateMachine.Instance != null && RaceStateMachine.Instance.RopesCut;
 
         private void BeginAnchor()
         {
@@ -319,6 +342,12 @@ namespace SyncRush
             UpdatePartnerPull();
             if (_state.Value == TetherState.Idle) return;
 
+            if (RopesCut)
+            {
+                EndContract(); // the rope snapped: an anchored Slingshot doesn't fire
+                return;
+            }
+
             PlayerTether partner = ResolvePartner();
             if (partner == null)
             {
@@ -363,7 +392,7 @@ namespace SyncRush
         /// </summary>
         private void UpdatePartnerPull()
         {
-            PlayerTether mate = PartnerTether();
+            PlayerTether mate = RopesCut ? null : PartnerTether();
             if (mate == null)
             {
                 ClearPartnerTracking();
@@ -623,6 +652,10 @@ namespace SyncRush
             }
 
             float tension = Mathf.Max(ContractTensionWith(mate), mate.ContractTensionWith(this));
+            if (!RopesCut && _partnerRope.Snapped)
+                _partnerRope.Restore(); // a new race
+            else if (RopesCut && !_partnerRope.Snapped)
+                SnapRope(_partnerRope, mate, tension);
             // Goes fully tense exactly where the leash starts dragging, so what you see matches what you feel.
             TickRope(_partnerRope, mate, tension, _leashLength);
         }
@@ -630,13 +663,40 @@ namespace SyncRush
         /// <summary>A Slingshot on a rival: its own rope, shown only while anchored.</summary>
         private void DrawRivalRope()
         {
+            if (!RopesCut && _rivalRope.Snapped)
+                _rivalRope.Restore();
+            else if (RopesCut && !_rivalRope.Snapped && _rivalRopeTarget != null)
+                SnapRope(_rivalRope, _rivalRopeTarget, _rivalRopeTension);
+
+            if (_rivalRope.Snapped)
+            {
+                if (_rivalRopeTarget != null && _rivalRopeTarget.IsSpawned)
+                    _rivalRope.TickSnapped(AttachPoint, _rivalRopeTarget.AttachPoint);
+                else
+                    _rivalRope.Hide();
+                return;
+            }
+
             PlayerTether target = IsSpawned && _state.Value != TetherState.Idle ? ResolvePartner() : null;
             if (target == null || IsPartner(target))
             {
                 _rivalRope.Hide();
+                _rivalRopeTarget = null;
                 return;
             }
+            _rivalRopeTarget = target;
+            _rivalRopeTension = _tension.Value;
             TickRope(_rivalRope, target, _tension.Value, _maxRopeLength);
+        }
+
+        /// <summary>Final-stretch SNAP: breaks the rope, with the sound at its middle if it was on screen.</summary>
+        private void SnapRope(RopeVisual rope, PlayerTether other, float tension)
+        {
+            // Past max length the rope is drawn at full tension, so it snaps hardest.
+            if (Vector3.Distance(AttachPoint, other.AttachPoint) > _leashLength) tension = 1f;
+            if (rope.Visible && _snapSound != null)
+                _snapAudio.PlayOneShot(_snapSound, _snapVolume);
+            rope.Snap(tension);
         }
 
         /// <summary>Tension of this player's active move if it targets <paramref name="other"/>, else 0.</summary>
@@ -703,6 +763,7 @@ namespace SyncRush
         private void OnGUI()
         {
             if (!IsOwner || !IsSpawned || gameObject.scene.name != LobbyManager.GameSceneName) return;
+            if (RopesCut) return; // PlayerShove owns the HUD from here
             _hudLabel ??= new GUIStyle(GUI.skin.label)
                 { fontSize = 18, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
 
